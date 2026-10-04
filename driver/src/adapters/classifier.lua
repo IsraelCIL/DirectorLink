@@ -4,6 +4,15 @@ local function normalizedDriverName(value)
     return string.lower(tostring(value or ""))
 end
 
+-- The owner's Samsung Refrigerator (DirectorLink) driver (ADR-049), also as Composer installs a
+-- second download of it: "DirectorLink-Samsung-Refrigerator (1).c4z".
+local REFRIGERATOR_DRIVER = "directorlink-samsung-refrigerator.c4z"
+
+function Classifier.isRefrigeratorDriver(driverFileName)
+    local name = normalizedDriverName(driverFileName)
+    return name == REFRIGERATOR_DRIVER or name:gsub(" %(%d+%)%.c4z$", ".c4z") == REFRIGERATOR_DRIVER
+end
+
 function Classifier.classify(driverFileName)
     local name = normalizedDriverName(driverFileName)
 

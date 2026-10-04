@@ -8,7 +8,7 @@ info:
     **Direct to Director. End-to-end integration. Open source.**
 
     DirectorLink runs as a driver inside the Control4 controller (Director) and serves this API on
-    the home LAN. Resources use logical names — rooms, devices, lights, thermostats, fans, blinds, cameras, relays, doorbells, the alarm, music (Sonos), scenes, schedules, the weather, the calendar, profiles, invitations. Control4
+    the home LAN. Resources use logical names — rooms, devices, lights, thermostats, fans, blinds, cameras, relays, doorbells, refrigerators, the alarm, music (Sonos), scenes, schedules, the weather, the calendar, profiles, invitations. Control4
     command names, proxy IDs and variable numbers never appear in the API.
 
     **Authentication.** Every operation except health, this API description, pairing and
@@ -19,7 +19,7 @@ info:
 
     **Roles.** Every API key has a role, and each role can do everything the ones before it
     can: `viewer` reads everything (including camera pictures) but the alarm, `member` also controls
-    lights, thermostats, fans, blinds and music, runs scenes and reads the alarm's status, `doors` also opens doors and gates, `admin` also
+    lights, thermostats, fans, blinds, refrigerators and music, runs scenes and reads the alarm's status, `doors` also opens doors and gates, `admin` also
     manages API keys, rooms (and the room of a Sonos room), scenes, schedules, the calendar's settings, invitations, profiles, remote access and the log. Each operation lists the least role it needs as `x-directorlink-role`;
     a key without it gets `403 FORBIDDEN`. Opening doors also needs the **Door Control**
     property of DirectorLink in Composer set to Enabled.
@@ -89,6 +89,14 @@ tags:
     description: Relays that open doors and gates (KNX Contact/Relay).
   - name: Doorbells
     description: Video doorbells (DoorBird) — rings, motion, access, and opening the gate or door wired to them.
+  - name: Refrigerators
+    description: |
+      Samsung refrigerators (since 1.7.0, ADR-049), through the Samsung Refrigerator (DirectorLink)
+      driver, which talks to Samsung's SmartThings cloud: fridge and freezer temperatures, the door,
+      the water filter, and Power Cool, Power Freeze, Sabbath Mode and the ice maker switched on and
+      off. A command reaches the refrigerator through Samsung's cloud; its new state shows once the
+      refrigerator confirms it, typically after about 4 seconds (the driver gives up after about a
+      minute). Doors and temperatures are read at the driver's poll interval (2 minutes by default).
   - name: Alarm
     description: |
       Whether the home's alarm is armed, read-only (ADR-038). Off until an installer turns on
@@ -111,6 +119,12 @@ tags:
       skipped and why, doors and gates opened, keys and invitations, changes made in Composer,
       backups, restores and driver updates. Kept on the controller (the newest 500 entries, 30 days
       at most); through the account only sealed, like every request. For admins.
+  - name: Alerts
+    description: |
+      Which alerts each device gets (1.7.0, ADR-050): a doorbell rang, a door or gate was opened, the
+      refrigerator's door was left open, a schedule failed. The controller sends them through
+      DirectorLink's servers sealed to each device's own key, so the servers learn only which key
+      ids an alert is for and when (docs/RELAY.md, `notify`). Each key reads and sets its own choices.
   - name: Logs
     description: The bridge's own recent log, for debugging.
   - name: Remote
@@ -971,6 +985,121 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /v1/scene-links:
+    get:
+      tags: [Scenes]
+      operationId: listSceneLinks
+      x-directorlink-role: admin
+      summary: List the scene links
+      description: |
+        Since 1.7.0 (ADR-051). Every scene that has a link for the phone's own automations, with
+        its scene's name, its label, when it was made and when it last ran; never a secret. Also
+        what a link needs to work: `remote_access` (the Composer property) and `home_linked` (the
+        account service has accepted this home). Links whose scene is gone or now opens doors or
+        gates, that were made for another home connection, or whose key (`made_by`) was revoked or
+        expired, go before the list is made.
+      responses:
+        "200":
+          description: The links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SceneLinkList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/scenes/{sceneId}/link:
+    parameters:
+      - $ref: "#/components/parameters/SceneId"
+    get:
+      tags: [Scenes]
+      operationId: getSceneLink
+      x-directorlink-role: admin
+      summary: Get a scene's link
+      description: Since 1.7.0 (ADR-051). The scene's link, without its secret; 404 when it has none.
+      responses:
+        "200":
+          description: The link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SceneLink"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Scenes]
+      operationId: createSceneLink
+      x-directorlink-role: admin
+      summary: Make a scene's link
+      description: |
+        Since 1.7.0 (ADR-051). A new private link for the scene, for the phone's own automations
+        (iPhone Shortcuts, Android automation apps, an NFC tag). It replaces the scene's link, which
+        stops working at once. The answer is the only place its `secret` ever appears: the controller
+        keeps a hash of it, as of API keys. A phone runs the scene with a POST to `url` without what
+        follows `#`, with the secret in the body (docs/SCENES.md); the account service passes it to
+        the home (`link`, docs/RELAY.md), and the scene runs as a member's key would run it.
+
+        Refused for a scene that opens doors or gates (409 `SCENE_OPENS_DOORS`: a step of a type a
+        link may not run; only lights, climate, fans, blinds, music and refrigerators may), while
+        Remote Access is off (409 `REMOTE_ACCESS_OFF`), and before the account service has accepted
+        the home (409 `HOME_NOT_LINKED`). A scene changed to open doors or gates loses its link. The
+        link goes with the key that makes it (`made_by`): revoking that key, or its expiry, removes
+        it.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SceneLinkCreate"
+            example:
+              label: Arriving home
+      responses:
+        "201":
+          description: The new link, with its secret, shown this once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SceneLinkCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    delete:
+      tags: [Scenes]
+      operationId: deleteSceneLink
+      x-directorlink-role: admin
+      summary: Remove a scene's link
+      description: Since 1.7.0 (ADR-051). The link stops working at once. The Composer action Remove All Scene Links removes every one.
+      responses:
+        "204":
+          description: Removed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 
   /v1/off:
     post:
@@ -1899,6 +2028,85 @@ paths:
         "502":
           $ref: "#/components/responses/CommandFailed"
 
+  /v1/refrigerators:
+    get:
+      tags: [Refrigerators]
+      operationId: listRefrigerators
+      x-directorlink-role: viewer
+      summary: List refrigerators
+      parameters:
+        - $ref: "#/components/parameters/RoomIdQuery"
+      responses:
+        "200":
+          description: Refrigerators with their current state, sorted by name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefrigeratorList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/refrigerators/{refrigeratorId}:
+    parameters:
+      - $ref: "#/components/parameters/RefrigeratorId"
+    get:
+      tags: [Refrigerators]
+      operationId: getRefrigerator
+      x-directorlink-role: viewer
+      summary: Get a refrigerator
+      responses:
+        "200":
+          description: The refrigerator and its current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refrigerator"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Refrigerators]
+      operationId: updateRefrigerator
+      x-directorlink-role: member
+      summary: Switch features of a refrigerator on or off
+      description: |
+        Every feature named is checked first: one the refrigerator does not have (not in its
+        `features`) is refused with 409 `FEATURE_NOT_SUPPORTED`, and nothing is sent. The answer
+        is the state last reported; read the refrigerator again for the change, which shows once
+        the refrigerator confirms it through Samsung's cloud (typically after about 4 seconds).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefrigeratorUpdate"
+            example:
+              sabbath_mode: true
+      responses:
+        "202":
+          description: Command sent. The body is the last state the controller reported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refrigerator"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/CommandFailed"
+
   /v1/alarm:
     get:
       tags: [Alarm]
@@ -2493,6 +2701,55 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /v1/alerts/choices:
+    get:
+      tags: [Alerts]
+      operationId: getAlertChoices
+      x-directorlink-role: viewer
+      summary: This key's alert choices
+      description: |
+        Whether this key's device switched alerts on, and which of the kinds its role may get, of
+        those this home has, it wants. Until it chooses: every kind but `door_opened`. A doorbell
+        goes to every role, `fridge_door` to members and up, `door_opened` and `schedule_failed` to
+        admins.
+      responses:
+        "200":
+          description: This key's choices.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertChoices"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [Alerts]
+      operationId: setAlertChoices
+      x-directorlink-role: viewer
+      summary: Change this key's alert choices
+      description: |
+        `on` when its device switches alerts on or off (the app also registers the browser with the
+        account service), `kinds` for what it wants; what is left out stays as it was. A kind its
+        role may not get is not kept.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertChoicesUpdate"
+      responses:
+        "200":
+          description: Changed; this key's choices now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertChoices"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
   /v1/backup/automatic:
     get:
       tags: [Backup]
@@ -2759,6 +3016,13 @@ components:
       schema:
         type: integer
         minimum: 1
+    RefrigeratorId:
+      name: refrigeratorId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
     RelayId:
       name: relayId
       in: path
@@ -2844,7 +3108,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off).
+      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off).
       content:
         application/problem+json:
           schema:
@@ -3022,7 +3286,7 @@ components:
               type: [string, "null"]
         inventory:
           type: object
-          required: [rooms, devices, supported_devices, lights, thermostats, fans, blinds, cameras, relays, doorbells]
+          required: [rooms, devices, supported_devices, lights, thermostats, fans, blinds, cameras, relays, doorbells, refrigerators]
           properties:
             rooms:
               type: integer
@@ -3045,6 +3309,9 @@ components:
               type: integer
             doorbells:
               type: integer
+            refrigerators:
+              type: integer
+              description: Since 1.7.0.
         lifecycle:
           type: object
           description: Driver load history, useful when testing driver updates.
@@ -3084,6 +3351,15 @@ components:
             automatic_backup:
               type: boolean
               description: "Always true since 1.6.0: admins can set automatic backups to the account (`/v1/backup/automatic`, ADR-048). Missing before 1.6.0."
+            alert_choices:
+              type: boolean
+              description: "Always true since 1.7.0: alerts are sealed to each device's key, and every key chooses its own (`/v1/alerts/choices`, ADR-050). Missing before 1.7.0, whose alerts go to admins only."
+            scene_links:
+              type: boolean
+              description: "Always true since 1.7.0: admins can make a link per scene for the phone's own automations (`/v1/scene-links`, ADR-051). Missing before 1.7.0."
+            refrigerators:
+              type: boolean
+              description: "Always true since 1.7.0: `/v1/refrigerators` and the `refrigerators` scene step (ADR-049). Missing before 1.7.0."
 
     PairRequest:
       oneOf:
@@ -3434,10 +3710,11 @@ components:
         `room_id` as the room they were picked in); without it, every device of the type in
         `room_id`, or in the whole home when `room_id` is null. A `music` step (1.5.0) names no
         devices: it pauses or stops the Sonos groups with a room in `room_id`, or every group.
+        A `refrigerators` step (1.7.0) switches features of Samsung refrigerators.
       properties:
         type:
           type: string
-          enum: [lights, climate, fans, blinds, relays, music]
+          enum: [lights, climate, fans, blinds, relays, music, refrigerators]
         room_id:
           type: [integer, "null"]
           minimum: 1
@@ -3458,7 +3735,9 @@ components:
             `{"position": 0-100}`; relays `{"action": "pulse"}`, what their Open button does (a
             door or gate relay is never held closed by a scene); music `{"action": "pause"}` or
             `{"action": "stop"}` (a radio station, which cannot pause, stops; a group pauses as
-            one).
+            one); refrigerators (1.7.0) any of `power_cool`, `power_freeze`, `sabbath_mode` and
+            `ice_maker`, true (on) or false (off), at least one (a feature a refrigerator does not
+            have is left out on it, `partial`, or skipped with `NOT_SUPPORTED` when none is left).
             climate may carry `heat_setpoint` and/or `cool_setpoint` instead of
             `target_temperature` (cool above heat): dual-setpoint thermostats take them as their
             setpoints (left out where they come closer than the thermostat's deadband);
@@ -3503,6 +3782,14 @@ components:
             action:
               type: string
               enum: [pulse, pause, stop]
+            power_cool:
+              type: boolean
+            power_freeze:
+              type: boolean
+            sabbath_mode:
+              type: boolean
+            ice_maker:
+              type: boolean
 
     SceneIcon:
       type: string
@@ -3614,6 +3901,81 @@ components:
           items:
             type: integer
             minimum: 1
+
+    SceneLink:
+      type: object
+      description: A scene's link for the phone's own automations (1.7.0, ADR-051), without its secret.
+      required: [scene_id, scene_name, link_id, label, made_by, created_at, last_used_at]
+      properties:
+        scene_id:
+          type: string
+          pattern: "^[0-9a-f]{8}$"
+        scene_name:
+          type: [string, "null"]
+        link_id:
+          type: string
+          pattern: "^[0-9a-f]{8}$"
+          description: Not secret; the link's address names it.
+        label:
+          type: [string, "null"]
+          description: What an admin called it ("Arriving home", "NFC by the door"); shown in the history with each run.
+        made_by:
+          type: [string, "null"]
+          pattern: "^[0-9a-f]{8}$"
+          description: The id of the API key that made it. Revoking that key, or its expiry, removes the link; Revoke All API Keys removes every link. Null for a link made before this was kept (a test build of 1.7.0), which only Revoke All API Keys ends.
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+
+    SceneLinkList:
+      type: object
+      required: [items, remote_access, home_linked]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SceneLink"
+        remote_access:
+          type: boolean
+          description: The Remote Access property is On; links work only then.
+        home_linked:
+          type: boolean
+          description: The account service has accepted this home's identity; links work only then, and only while an account has the home.
+
+    SceneLinkCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        label:
+          type: [string, "null"]
+          maxLength: 64
+          description: Optional; blank for none.
+
+    SceneLinkCreated:
+      allOf:
+        - $ref: "#/components/schemas/SceneLink"
+        - type: object
+          required: [home_id, secret, url, replaced]
+          properties:
+            home_id:
+              type: string
+              pattern: "^[0-9a-f]{32}$"
+            secret:
+              type: string
+              pattern: "^[0-9a-f]{40}$"
+              description: 160 random bits, shown only in this answer. Whoever has it can run this scene.
+            url:
+              type: string
+              description: |
+                `https://api.directorlink.io/run/<home_id>.<link_id>#<secret>`. Opened in a browser (an
+                NFC tag), it shows a Run button; the browser never sends what follows `#`, and the page
+                posts it. An automation posts to the address before `#` with the secret in the body.
+            replaced:
+              type: boolean
+              description: The scene had a link, which stopped working.
 
     SceneRun:
       type: object
@@ -4290,7 +4652,7 @@ components:
 
     DeviceType:
       type: string
-      enum: [light, thermostat, fan, blind, camera, relay, doorbell, other]
+      enum: [light, thermostat, fan, blind, camera, relay, doorbell, refrigerator, other]
 
     Device:
       type: object
@@ -4976,6 +5338,105 @@ components:
           items:
             $ref: "#/components/schemas/Fan"
 
+    RefrigeratorFeature:
+      type: string
+      enum: [power_cool, power_freeze, sabbath_mode, ice_maker]
+
+    Refrigerator:
+      type: object
+      required:
+        - id
+        - name
+        - room
+        - online
+        - fridge_temperature
+        - fridge_setpoint
+        - freezer_temperature
+        - freezer_setpoint
+        - door_open
+        - water_filter_usage
+        - power_cool
+        - power_freeze
+        - sabbath_mode
+        - ice_maker
+        - features
+        - features_reported
+      description: |
+        A Samsung refrigerator (since 1.7.0). Temperatures and setpoints are in °C to 0.1 (a
+        refrigerator set to °F is converted), null when it does not report them. A driver that does
+        not say what the refrigerator reports (`features_reported` false) starts every value at 0:
+        then an exact 0 is taken as not reported, except a freezer's in °F.
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        room:
+          oneOf:
+            - $ref: "#/components/schemas/RoomRef"
+            - type: "null"
+        online:
+          type: boolean
+          description: Samsung's cloud reaches the refrigerator. False until its driver has read it, and while the driver is not signed in to SmartThings.
+        fridge_temperature:
+          type: [number, "null"]
+        fridge_setpoint:
+          type: [number, "null"]
+        freezer_temperature:
+          type: [number, "null"]
+        freezer_setpoint:
+          type: [number, "null"]
+        door_open:
+          type: [boolean, "null"]
+          description: A door is open, as read at the driver's poll interval. Null when the refrigerator has no door sensor.
+        water_filter_usage:
+          type: [number, "null"]
+          description: How much of the water filter is used, in percent. Null without one.
+        power_cool:
+          type: [boolean, "null"]
+          description: Fast cooling. Null when the refrigerator does not have it.
+        power_freeze:
+          type: [boolean, "null"]
+          description: Fast freezing. Null when the refrigerator does not have it.
+        sabbath_mode:
+          type: [boolean, "null"]
+          description: Sabbath mode. Null when the refrigerator does not have it.
+        ice_maker:
+          type: [boolean, "null"]
+          description: The ice maker. Null when the refrigerator does not have one.
+        features:
+          type: array
+          description: The features PATCH takes. All four when its driver does not say which it has (`features_reported` false).
+          items:
+            $ref: "#/components/schemas/RefrigeratorFeature"
+        features_reported:
+          type: boolean
+          description: The refrigerator's driver says which features it has.
+
+    RefrigeratorUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: Any of the features, true to switch it on, false to switch it off.
+      properties:
+        power_cool:
+          type: boolean
+        power_freeze:
+          type: boolean
+        sabbath_mode:
+          type: boolean
+        ice_maker:
+          type: boolean
+
+    RefrigeratorList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Refrigerator"
+
     RemoteAccess:
       type: object
       required: [enabled, connected, lock, home_id]
@@ -5127,6 +5588,47 @@ components:
         level:
           $ref: "#/components/schemas/LogLevel"
 
+    AlertChoices:
+      type: object
+      required: ["on", kinds]
+      properties:
+        "on":
+          type: boolean
+          description: This key's device switched alerts on.
+        kinds:
+          type: object
+          description: The kinds this key's role may get that this home has (a refrigerator's only once it has one), each wanted or not.
+          properties:
+            doorbell:
+              type: boolean
+            door_opened:
+              type: boolean
+            fridge_door:
+              type: boolean
+            schedule_failed:
+              type: boolean
+          additionalProperties: false
+
+    AlertChoicesUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        "on":
+          type: boolean
+        kinds:
+          type: object
+          additionalProperties: false
+          properties:
+            doorbell:
+              type: boolean
+            door_opened:
+              type: boolean
+            fridge_door:
+              type: boolean
+            schedule_failed:
+              type: boolean
+
     ActivityList:
       type: object
       required: [items, next_before]
@@ -5149,10 +5651,21 @@ components:
           a run caught up after a restart, `no_weather` for one that ran without the weather, or the
           weather that started it (`heat`, `wind`, `rain`).
         - `door`: `pulse` (opened; `via` names the scene that did it), `hold` (a relay held closed,
-          its door held open), `release`, `doorbell` (the gate wired to a doorbell opened).
+          its door held open), `release`, `doorbell` (the gate wired to a doorbell opened). Since
+          1.7.0 also `pulse` and `doorbell` with `who` `control4`: a door or gate that the device
+          reported opened without DirectorLink (ADR-050); and `left_open`: a refrigerator's door open
+          longer than its driver's Door Open Alert, once per opening, `who` DirectorLink (ADR-049).
         - `access`: `paired`, `created`, `role_changed` (`from`, `to`), `revoked`, `forgotten` (a
           device removed its own key), `expired`, `joined` (an invitation accepted), `all_revoked`
-          (Composer's Revoke All API Keys; `count`).
+          (Composer's Revoke All API Keys; `count`). Scene links (1.7.0, ADR-051): `link_created`,
+          `link_replaced`, `link_removed` (`what` is the scene, `note` the link's label; `reason`
+          `doors` when a change made the scene open doors or gates, `scene_gone` when the scene was
+          deleted, `other_home` when it was made for another home connection, `key_gone` when the
+          key that made it was revoked or expired; none when an admin removed it), `links_removed`
+          (all of them: Composer's Remove All Scene Links, `reason` `keys_revoked` after Revoke All
+          API Keys, or `new_identity` after Reset Remote Identity; `count`; `outcome` `failed` when
+          the controller could not save it, and the links still work).
+        - A scene run by its link (1.7.0) is `scene` `run` with `who.type` `link`.
         - `composer`: `project` (devices and rooms removed, added, renamed or moved, in `changes`),
           `setting` (a DirectorLink property changed in Composer: `what` is its name, `to` its value).
         - `system`: `backup`, `restore` (`from`: when the backup was made), `cloud_backup` (an
@@ -5176,7 +5689,7 @@ components:
           enum: [scene, schedule, door, composer, access, system]
         action:
           type: string
-          enum: [run, "off", pulse, hold, release, doorbell, paired, created, role_changed, revoked, forgotten, expired, joined, all_revoked, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added]
+          enum: [run, "off", pulse, hold, release, doorbell, left_open, paired, created, role_changed, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added]
         who:
           $ref: "#/components/schemas/ActivityWho"
         what:
@@ -5191,10 +5704,10 @@ components:
         outcome:
           type: string
           enum: [ran, skipped, failed]
-          description: For scenes, schedules and backups to the account (`cloud_backup`). A run that failed on a device is `failed`; one that sent nothing is `skipped`.
+          description: For scenes, schedules and backups to the account (`cloud_backup`). A run that failed on a device is `failed`; one that sent nothing is `skipped`. Also `failed` for `links_removed` that the controller could not save (the links still work).
         reason:
           type: string
-          enum: [shabbat, paused, calendar_off, only_if, no_weather, scene_gone, error, remote_off, account_unreachable, not_linked, too_large, limit, account_full, stopped]
+          enum: [shabbat, paused, calendar_off, only_if, no_weather, scene_gone, error, remote_off, account_unreachable, not_linked, too_large, limit, account_full, stopped, doors, other_home, new_identity, key_gone, keys_revoked]
           description: |
             Why a schedule was skipped or failed: `shabbat` (it skips Shabbat and holidays),
             `paused` (the Schedules property in Composer), `calendar_off` (it runs only on Shabbat
@@ -5211,6 +5724,10 @@ components:
             have no room left in the account, 25 MB in all), `stopped` (automatic backups were
             turned off, or the backup password changed, while it was being made), `error`
             (anything else; the log and `GET /v1/backup/automatic`'s `last.code` say what).
+
+            Why a scene link went (`link_removed`, 1.7.0): `doors`, `scene_gone`, `other_home`,
+            `key_gone` (the key that made it was revoked or expired); and all of them
+            (`links_removed`): `new_identity`, `keys_revoked` (Revoke All API Keys).
         note:
           type: string
           description: See `kind` for schedules and Turn off all. For a daily `cloud_backup` that failed, `retry` when it is tried again that night (every 15 minutes until 06:00).
@@ -5250,6 +5767,8 @@ components:
               type: string
             invitation_id:
               type: string
+            link_id:
+              type: string
         changes:
           type: array
           items:
@@ -5261,13 +5780,15 @@ components:
       properties:
         type:
           type: string
-          enum: [key, schedule, composer, controller]
-          description: A key (an app, a device, a script), a schedule, Composer, or DirectorLink itself.
+          enum: [key, schedule, composer, controller, control4, link]
+          description: A key (an app, a device, a script), a schedule, Composer, DirectorLink itself, Control4 (1.7.0, ADR-050) for a door or gate that opened without DirectorLink (its app, a keypad, its programming, the DoorBird's own app), or a scene's link (1.7.0, ADR-051, a phone's automation; `link_id`, and `name`, its label).
         key_id:
+          type: string
+        link_id:
           type: string
         name:
           type: string
-          description: The key's name (its device), as it was then.
+          description: The key's name (its device), or the link's label, as it was then.
         profile:
           type: string
           description: The person the key belongs to, as named then.
@@ -5441,6 +5962,44 @@ components:
                         type: integer
                       name:
                         type: [string, "null"]
+            scene_links:
+              type: object
+              description: The scene links (1.7.0, ADR-051), as the controller keeps them - a hash of each secret, never the secret. They come back only with the backup's keys; a backup without them keeps the links here whose scene comes back.
+              required: [version, links]
+              properties:
+                version:
+                  type: integer
+                links:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, scene_id, alg, hash, home, created_at]
+                    properties:
+                      id:
+                        type: string
+                        pattern: "^[0-9a-f]{8}$"
+                      scene_id:
+                        type: string
+                        pattern: "^[0-9a-f]{8}$"
+                      label:
+                        type: string
+                      alg:
+                        type: string
+                        enum: [sha256, sha1]
+                      hash:
+                        type: string
+                      home:
+                        type: string
+                        pattern: "^[0-9a-f]{32}$"
+                        description: The home id the link's address names.
+                      by:
+                        type: string
+                        pattern: "^[0-9a-f]{8}$"
+                        description: The id of the key that made it; the link goes with that key.
+                      created_at:
+                        type: string
+                      last_used_at:
+                        type: string
 
     AutomaticBackupKey:
       type: object
@@ -5671,6 +6230,9 @@ components:
             sonos_rooms:
               type: [integer, "null"]
               description: Sonos players with a room an admin chose (1.6.0); null when the backup has none, and the choices stay as they are.
+            scene_links:
+              type: integer
+              description: Scene links after the restore (1.7.0, ADR-051). Like the keys - the backup's only when its keys come back (keys.action restore; from a backup made before links, the ones here), else the ones here, so a link removed or replaced since the backup was made never comes back. Each only while its scene comes back without doors or gates, the home's identity in use is the one it was made for, and the key that made it is among the keys after the restore.
         left_out:
           type: object
           description: What the backup has that is left out, not valid or with nothing left to act on (steps whose devices or room match nothing, schedules whose scene is not in the backup).

@@ -263,6 +263,14 @@ local function stepText(step, registry)
         action = set.position .. "% open"
     elseif step.type == "music" then
         action = set.action
+    elseif step.type == "refrigerators" then
+        local parts = {}
+        for _, feature in ipairs({ "power_cool", "power_freeze", "sabbath_mode", "ice_maker" }) do
+            if set[feature] ~= nil then
+                parts[#parts + 1] = feature:gsub("_", " ") .. (set[feature] and " on" or " off")
+            end
+        end
+        action = table.concat(parts, ", ")
     else
         action = "pulse (skipped when a schedule runs it)"
     end

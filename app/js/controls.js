@@ -1,10 +1,20 @@
 // Device commands. Every control updates the screen at once (optimistic), sends the PATCH
 // (answered 202 with the last reported state), then re-reads the device until the controller
 // confirms it. A failed command reverts the change and shows a short error on the device.
-// Blinds follow their move instead, which takes far longer (see the blinds section).
+// Blinds follow their move instead, which takes far longer (see the blinds section). A refrigerator
+// confirms through Samsung's cloud: it is read every 2 s for up to 65 s, then quietly every 5 s for
+// 2 minutes more, so that a late confirmation still shows (refrigerators.js).
 
 import { fanChangeConfirmed, optimisticFan } from "./fans.js";
 import { t } from "./i18n.js";
+import {
+  CONFIRM_MS as FRIDGE_CONFIRM_MS,
+  CONFIRM_POLL_MS as FRIDGE_POLL_MS,
+  LATE_MS as FRIDGE_LATE_MS,
+  LATE_POLL_MS as FRIDGE_LATE_POLL_MS,
+  fridgeChangeConfirmed,
+  optimisticFridge,
+} from "./refrigerators.js";
 import { api, errorText, handleUnauthorized, keyGeneration, keyInUse, noteForbidden, whenForgotten } from "./session.js";
 import { activeSetpoint, isDual, sameTemperature, withSetpoint } from "./setpoints.js";
 import { MOVE_POLL_MS, REPORT_GAP_MS, afterMove, answered, followMove, followSettle, followsReport, startMove, startSettle } from "./shades.js";
@@ -42,16 +52,34 @@ const CONFIRMERS = {
   light: lightChangeConfirmed,
   thermostat: thermostatChangeConfirmed,
   fan: fanChangeConfirmed,
+  refrigerator: fridgeChangeConfirmed,
 };
+
+// How long a kind takes to confirm, and how often it is read meanwhile.
+const CONFIRM_TIMES = { refrigerator: { ms: FRIDGE_CONFIRM_MS, poll: FRIDGE_POLL_MS } };
+
+// Changes on their way, per device ("refrigerator:141" -> [change, ...]): a refrigerator's take
+// seconds, and one confirmed must not hide another still on its way.
+const inFlight = new Map();
+
+function othersOnTheirWay(kind, device, key, change) {
+  return (inFlight.get(key) || []).filter((item) => item !== change).reduce((shown, other) => optimistic(kind, shown, other), device);
+}
+
+// What is on its way to device `id` of `kind`, as one change ({ sabbath_mode: true }); {} for none.
+export function changesOnTheirWay(kind, id) {
+  return Object.assign({}, ...(inFlight.get(deviceKey(kind, id)) || []));
+}
 
 // Re-reads the device until it reports the change (or 5 s pass). Returns the last state read, or
 // null once the key is forgotten, or being forgotten, since `since` (session.js keyGeneration): then
 // nothing more is read.
 async function waitForConfirmation(kind, id, change, since = keyGeneration()) {
-  const deadline = Date.now() + CONFIRM_MS;
+  const timing = CONFIRM_TIMES[kind] || { ms: CONFIRM_MS, poll: 600 };
+  const deadline = Date.now() + timing.ms;
   let last = null;
   while (Date.now() < deadline) {
-    await sleep(600);
+    await sleep(timing.poll);
     if (since !== keyGeneration()) return null;
     last = await api(`${KINDS[kind].path}/${id}`);
     if (since !== keyGeneration()) return null;
@@ -60,6 +88,32 @@ async function waitForConfirmation(kind, id, change, since = keyGeneration()) {
     }
   }
   return { device: last, confirmed: false };
+}
+
+// A refrigerator that did not confirm in time may still do so (its driver sees the change at its
+// next poll): read quietly for a while longer, and once it reports the change, show it and take back
+// the word that it did not confirm. Stops when the key is forgotten, or being forgotten.
+async function followLateConfirmation(kind, id, change, since) {
+  const key = deviceKey(kind, id);
+  const said = state.errors[key]?.stamp;
+  const deadline = Date.now() + FRIDGE_LATE_MS;
+  while (Date.now() < deadline) {
+    await sleep(FRIDGE_LATE_POLL_MS);
+    if (since !== keyGeneration()) return;
+    let device;
+    try {
+      device = await api(`${KINDS[kind].path}/${id}`);
+    } catch {
+      continue;
+    }
+    if (since !== keyGeneration()) return;
+    if (CONFIRMERS[kind](device, change)) {
+      replaceDevice(kind, othersOnTheirWay(kind, device, key, change));
+      if (said !== undefined && state.errors[key]?.stamp === said) clearError(key);
+      notify();
+      return;
+    }
+  }
 }
 
 // Lights keep the name the tests look for.
@@ -76,6 +130,7 @@ export function optimistic(kind, device, change) {
     return { ...device, on: change.on, brightness: change.on ? device.brightness : device.dimmable ? 0 : null };
   }
   if (kind === "fan") return optimisticFan(device, change);
+  if (kind === "refrigerator") return optimisticFridge(device, change);
   const next = { ...device, ...change };
   // With heat and cool setpoints, the target is the setpoint of the mode (a new mode, or new setpoints).
   if (kind === "thermostat" && isDual(next)) next.target_temperature = activeSetpoint(next);
@@ -96,6 +151,9 @@ export async function sendChange(kind, id, change, { before } = {}) {
   replaceDevice(kind, optimistic(kind, current, change));
   clearError(key);
   setPending(key, true);
+  inFlight.set(key, [...(inFlight.get(key) || []), change]);
+  // A refrigerator's card says what is on its way, which the device data alone does not show.
+  if (kind === "refrigerator") ui.tick += 1;
   notify();
 
   // Once the key is forgotten, or being forgotten, nothing more is read and the device is left as
@@ -109,7 +167,12 @@ export async function sendChange(kind, id, change, { before } = {}) {
       if (!confirmation) return;
       const { device, confirmed } = confirmation;
       if (device && confirmed) {
-        replaceDevice(kind, device);
+        replaceDevice(kind, othersOnTheirWay(kind, device, key, change));
+      } else if (kind === "refrigerator" && device) {
+        // Its driver changes a feature only once the refrigerator confirms: what it reports is so.
+        replaceDevice(kind, othersOnTheirWay(kind, device, key, change));
+        setError(key, t("refrigerators.notConfirmed"));
+        followLateConfirmation(kind, id, change, since);
       } else if (!confirmed) {
         // Sent, but not reported back yet: keep what was sent and say so.
         setError(key, t("errors.notConfirmed"));
@@ -138,6 +201,10 @@ export async function sendChange(kind, id, change, { before } = {}) {
     }
     setError(key, errorText(error) || t("errors.commandFailed"));
   } finally {
+    const left = (inFlight.get(key) || []).filter((item) => item !== change);
+    if (left.length) inFlight.set(key, left);
+    else inFlight.delete(key);
+    if (kind === "refrigerator") ui.tick += 1;
     setPending(key, false);
     notify();
   }
@@ -150,6 +217,11 @@ export function setLight(light, change) {
 // {"on": true | false} or {"speed": 1-4} (fans.js levelChange).
 export function setFan(fan, change) {
   return sendChange("fan", fan.id, change);
+}
+
+// {"sabbath_mode": true}: a refrigerator's feature on or off (refrigerators.js).
+export function setRefrigerator(fridge, change) {
+  return sendChange("refrigerator", fridge.id, change);
 }
 
 // Target temperature − / +: the screen follows every tap; the command goes out once the

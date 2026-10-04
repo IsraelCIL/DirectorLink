@@ -497,6 +497,38 @@ test("in Hebrew", async () => {
   }
 });
 
+test("a door or gate opened without DirectorLink is said to be Control4's (ADR-050)", async () => {
+  home("admin");
+  controller({ items: [{ id: 1, at: iso(NOW - 60 * 1000), kind: "door", action: "pulse", who: { type: "control4" }, what: "Main Door", room: "Entrance", ids: { device_id: 70, room_id: 99 } }] });
+  const rows = items(await open());
+  assert.equal(line(rows[0]), "Opened Main Door (Entrance), In Control4");
+});
+
+// A refrigerator door left open (1.7.0, ADR-049): a door entry DirectorLink noticed, with the
+// refrigerator's icon, its name and its room.
+test("a refrigerator door left open is listed under Doors, in both languages", async () => {
+  const leftOpen = { id: 1, at: iso(NOW - 60 * 1000), kind: "door", action: "left_open", who: { type: "controller" }, what: "Refrigerator", room: "Entrance", ids: { device_id: 141, room_id: 99 } };
+  home("admin");
+  const asked = controller({ items: [leftOpen] });
+  let view = await open();
+  let row = items(view)[0];
+  assert.equal(line(row), "The door of Refrigerator (Entrance) was left open, DirectorLink");
+  assert.equal(outcome(row), "");
+  assert.match(find(row, (node) => node.tagName === "SVG")?.innerHTML || "", /rect x="5.5" y="2.5"/, "the refrigerator's icon");
+  byKey(view, "history-filter:doors").dispatch("click");
+  await settle();
+  assert.ok(asked.includes("/v1/activity?limit=50&kind=door"), asked.join(" "));
+  assert.equal(items(history.historyView()).length, 1);
+  await setLanguage("he");
+  try {
+    view = await open();
+    row = items(view)[0];
+    assert.equal(line(row), "הדלת של Refrigerator (כניסה) נשארה פתוחה, DirectorLink");
+  } finally {
+    await setLanguage("en");
+  }
+});
+
 test("every string the page uses is in both languages", async () => {
   const { default: en } = await import("../../app/i18n/en.js");
   const { default: he } = await import("../../app/i18n/he.js");

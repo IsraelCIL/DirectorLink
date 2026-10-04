@@ -89,7 +89,7 @@ const HOME = "c".repeat(32);
 const PREVIEW = {
   backup: { created_at: "2026-10-03T00:27:00Z", driver_version: "1.6.0", format_version: 1, home: "בית Home" },
   origin: { another_home: false, reasons: [], home_now: "בית Home", controller: "same" },
-  counts: { keys: 1, profiles: 1, scenes: 0, schedules: 0, room_names: 0, room_order: 0, sonos_rooms: 1 },
+  counts: { keys: 1, profiles: 1, scenes: 0, schedules: 0, room_names: 0, room_order: 0, sonos_rooms: 1, scene_links: 2 },
   left_out: { scenes: 0, steps: 0, schedules: 0, profiles: 0 },
   keys: { action: "kept", count: 1, in_backup: 1, items: [], replaced: null, yours: "kept", conflict: false, expired: 0, left_out: 0, over_limit: false, limit: 20 },
   remote: { action: "same", home_id: HOME, current_home_id: HOME, remote_access: true, old_controller: false },
@@ -451,6 +451,7 @@ test("a backup in the account is opened with its password and goes to the same c
   assert.equal(ui.backup.stage, "preview");
   const preview = panelText();
   assert.ok(preview.includes("Sonos players with a room chosen"), "the Sonos rooms are in the preview");
+  assert.ok(preview.includes("Scenes with a link for automations2"), "and the scene links (1.7.0)");
   assert.ok(preview.includes("the Sonos player “Lounge Amp”"), "and where a room that is gone was used");
   assert.ok(byKey(backupPanel(), "backup-replace"));
   for (const call of [...controller.calls, ...account.calls]) assert.ok(!call.raw.includes(key.password), "the password never leaves the browser");

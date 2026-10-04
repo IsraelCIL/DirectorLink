@@ -45,8 +45,11 @@ test("every alert is padded to the same size, so its length does not say which i
     const home = "0123456789abcdef0123456789abcdef";
     const at = "2026-10-03T05:00:00.000Z";
     const sizes = [];
-    for (const kind of ["offline", "schedule_failed"]) {
-      const message = JSON.stringify({ kind, home, at });
+    // The cloud's own alerts, and one the controller seals (ADR-050): every detail is padded to 496
+    // bytes, 512 encrypted, 684 characters of base64.
+    const sealed = { kind: "sealed", home, key: "0a1b2c3d", at, sealed: { iv: "A".repeat(22) + "==", ct: "A".repeat(684), mac: "A".repeat(43) + "=" } };
+    for (const kind of ["offline", "schedule_failed", "sealed"]) {
+      const message = JSON.stringify(kind === "sealed" ? sealed : { kind, home, at });
       const body = Buffer.from(await encryptPayload(message, browser.subscription.keys));
       // Header (salt 16, record size 4, key length 1, key 65), the padded record, the tag (16).
       assert.equal(body.length, 86 + MESSAGE_BYTES + 16, kind);
@@ -54,7 +57,7 @@ test("every alert is padded to the same size, so its length does not say which i
       assert.equal(decrypt(body, browser), message, "the browser takes the padding off (RFC 8188)");
       sizes.push(body.length);
     }
-    assert.equal(sizes[0], sizes[1]);
+    assert.equal(new Set(sizes).size, 1, "one size for all");
     // A longer message is not cut: it is only not padded.
     const long = "x".repeat(MESSAGE_BYTES + 10);
     assert.equal(decrypt(Buffer.from(await encryptPayload(long, browser.subscription.keys)), browser), long);

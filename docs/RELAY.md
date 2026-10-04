@@ -7,6 +7,8 @@ for that home travel over it. This document is the contract between `driver/src/
 
 Since version 1 (DirectorLink 0.10.0) **everything the relay passes on is sealed end to end**: the
 relay routes envelopes it cannot read. The plain requests of version 0 are refused by the driver.
+One exception since 1.7.0: a scene link's run (`link`, below; ADR-051) carries the link's id and
+secret as the phone sent them, because a phone's automation cannot seal.
 
 ## Identity of a home
 
@@ -121,7 +123,7 @@ same holds the other way for what the driver asks the relay (`invitation`, `back
 | --- | --- | --- |
 | driver → relay | `ping` (plain text) | Keep-alive, every 10 s (25 s before 1.6.0), and if Director polls the connection. |
 | relay → driver | `pong` (plain text) | Answer to `ping`, sent by the runtime without waking the relay's code. |
-| driver → relay | `{"type":"hello","home":"<home_id>","version":"1.6.0","ping_s":10}` | First message after connecting. `ping_s`: how often the driver pings, in seconds (since 1.6.0; without it the relay counts 25 s). |
+| driver → relay | `{"type":"hello","home":"<home_id>","version":"1.7.0","ping_s":10,"features":["scene_links"]}` | First message after connecting. `ping_s`: how often the driver pings, in seconds (since 1.6.0; without it the relay counts 25 s). `features` (since 1.7.0): what the relay may send this driver besides what every version takes; `scene_links`: `link` runs. A driver that does not list a feature is never sent its messages. |
 | driver → relay | `{"type":"keys","ids":["<key id>", …]}` | The ids of the home's API keys (ids only), after `hello` and after every change. The cloud forgets the others; an account whose keys are all gone leaves the home (never its owner). Since 0.11.0. |
 | relay → driver | `{"type":"e2e","id":"…","envelope":{…}}` | A request sealed by a device (the lock, `docs/ACCOUNTS.md`). |
 | driver → relay | `{"type":"e2e","id":"…","envelope":{…}}` | The sealed answer; or `{"type":"e2e","id":"…","code":"…"}` when the request is refused. |
@@ -135,8 +137,15 @@ same holds the other way for what the driver asks the relay (`invitation`, `back
 | driver → relay | `{"type":"backup_chunk","id":"…","index":0,"count":3,"size":174000,"key_id":"<16 hex>","why":"daily","data":"…"}`, then `{"type":"backup_chunk","id":"…","backup":"<32 hex>","index":1,"data":"…"}` | An automatic backup (ADR-048, `docs/BACKUP.md`), sealed to the backup password's public key: its text, printable ASCII only (JSON around base64), in chunks of at most 65,536 bytes (the driver sends 60,000), each sent once the one before is answered. The first says how many there are, the whole size in bytes (at most 3,000,000), which password's key it is sealed to, and `why`: `daily` for the nightly backup, `now` for Back up now. Since 1.6.0. |
 | relay → driver | `{"type":"backup_result","id":"…","ok":true,"backup":"<32 hex>","complete":false}` | Kept (`complete` after the last); or `"ok":false` with `INVALID_REQUEST` (also for a character that is not printable ASCII), `NOT_CLAIMED` (no account has claimed the home), `BACKUP_TOO_LARGE`, `BACKUP_LIMIT` (the home started 4 backups this UTC day; its first `daily` one goes besides), `ACCOUNT_BACKUPS_FULL` (the backups that must stay in the owner's account, with this one, would pass 25 MB), `SIZE_MISMATCH`, `OUT_OF_ORDER`, `UPLOAD_NOT_FOUND` or `INTERNAL`: the driver stops and logs why. With no answer within 30 s it stops too. |
 | driver → relay | `{"type":"keys","ids":[…],"admins":["<key id>", …]}` | Since 1.6.0 `keys` also says which of the ids are admin keys: only accounts that use one get the home's alerts (ADR-047) and may list, download and delete the account's backups of the home (ADR-048), the owner too. Without `admins` (drivers before 1.6.0) the cloud knows no admin: nobody can switch alerts on, and only the home's owner sees its backups. |
-| driver → relay | `{"type":"alert","kind":"schedule_failed","at":"<ISO time>"}` | A scheduled scene failed at `at` (a device refused, or it could not run): the cloud alerts the home's admins, at most three times an hour. Nothing names the schedule, the scene or a device. Sent only while connected; no answer. Since 1.6.0 (ADR-047). |
+| driver → relay | `{"type":"alert","kind":"schedule_failed","at":"<ISO time>"}` | A scheduled scene failed at `at` (a device refused, or it could not run): the cloud alerts the home's admins, at most three times an hour. Nothing names the schedule, the scene or a device. Sent only while connected; no answer. Since 1.6.0 (ADR-047); from 1.7.0 drivers send `notify` instead, which the cloud cannot read. |
+| driver → relay | `{"type":"notify","at":"<ISO time>","for":{"<key id>":{"iv":"…","ct":"…","mac":"…"}, …},"brief":true}` | An alert the controller made (a doorbell rang, a door or gate was opened, the refrigerator's door was left open, a schedule failed), for the keys it names, each part sealed to that key's alert key (ADR-050), every `ct` 684 characters (each detail is padded to one size): the cloud cannot read what it is about; only which keys it names and `brief` tell it some kinds (ADR-050's Consequence). It pushes each part, at once, only to the browsers registered with that key id by an account that uses that key at the home. `brief` (a doorbell): the push service keeps it a minute. At most 50 keys, 60 messages a home an hour. Sent only while connected; no answer. Since 1.7.0. |
+| relay → driver | `{"type":"link","id":"…","link":"<8 hex>","secret":"<40 hex>"}` | A scene's link, run from a phone's automation (1.7.0, ADR-051, docs/SCENES.md): not sealed. Sent only to a driver whose `hello` lists `scene_links`, for a home an account has claimed, at most 30 a minute a home, and none from an address whose runs were answered 404 ten times in 10 minutes. The driver checks the secret against the hash it keeps, in constant time, and runs the scene as a member's key would. |
+| driver → relay | `{"type":"link_result","id":"…","ok":true,"result":"ran"}` | How it went: `ran`, `partly` (some devices skipped or failed), `failed` (none ran) or `nothing` (there was nothing to run: its devices were removed in Composer); or `"ok":false` with `NOT_FOUND` (an unknown link, a wrong secret, a scene gone or with doors or gates, the key that made the link gone: all alike), `RATE_LIMITED` (6 runs a minute a link; `retry_s`) or `INTERNAL`. Never names the scene. Since 1.7.0. |
 | relay → driver | `{"type":"request",…}` | Version 0. Refused: `{"type":"response","id":"…","status":410,…}` with `code` `RELAY_REQUESTS_RETIRED`; nothing reaches the API. |
+
+A message of a type the driver does not know is ignored (logged at debug level as `ignored relay
+message`) and never answered: the relay sends new types only to drivers whose `hello` lists them
+(`features`), since one sent anyway would wait for its 15 s timeout. Before 1.7.0 no driver lists any.
 
 Refusal codes from the driver: `UNKNOWN_KEY`, `BAD_ENVELOPE`, `BAD_MAC`, `BAD_CIPHERTEXT`, `BAD_REQUEST`, `STALE`
 (outside the 2-minute window, or sealed before the driver started), `REPLAYED`, `TOO_LARGE`
@@ -263,6 +272,9 @@ internet provider or Cloudflare's edge.
   and pairing (`POST /v1/auth/pair`) works only there too (`PAIRING_ONLY_ON_HOME_NETWORK`).
 - Only the controller registers invitations for its home; the account service's own endpoint for
   it is kept for the home's owner, for drivers before 1.0.0 (`OWNER_ONLY` for other members).
+- A scene link's run (`link`, 1.7.0) is no API request: it runs only the scene the link was made
+  for, as a member's key, never one that opens doors or gates, and goes into the history as run by
+  that link (ADR-051). The driver logs it with the link's id, never its secret.
 
 ## Test endpoints
 

@@ -55,7 +55,8 @@ REQUIRED_PROPERTIES = (
 SAFE_DEFAULTS = {"Door Control": "Disabled", "Relay Hold": "Not allowed", "Jewish Calendar": "Off", "Alarm Status": "Off", "Sonos": "Off"}
 
 # Refresh Project (1.1.0) reads the project again after changes in Composer, without a restart.
-REQUIRED_ACTIONS = ("NEW_PAIRING_CODE", "REVOKE_API_KEYS", "PRINT_AUTOMATION", "REFRESH_PROJECT", "RESET_REMOTE_IDENTITY")
+# Remove All Scene Links (1.7.0, ADR-051) ends every scene's link at once.
+REQUIRED_ACTIONS = ("NEW_PAIRING_CODE", "REVOKE_API_KEYS", "PRINT_AUTOMATION", "REFRESH_PROJECT", "RESET_REMOTE_IDENTITY", "REMOVE_SCENE_LINKS")
 
 # Source fragments that encode security decisions; removing one should be deliberate.
 SECURITY_CONTRACT = {
@@ -156,6 +157,21 @@ SECURITY_CONTRACT = {
     # A schedule runs its scene like a member's key: never doors or gates.
     "src/core/scheduler.lua": (
         '{ id = "schedule:" .. schedule.id, role = "member" }',
+    ),
+    # Scene links (ADR-051): only a hash of each secret is kept, compared in constant time; only
+    # scenes whose steps are all of an allowed type (never doors or gates); a run is a member's,
+    # checked again (its key too), and never logs the secret.
+    "src/core/scene_links.lua": (
+        "        hash = link.hash,\n        home = link.home,\n",
+        "if found and hash and sameText(hash, found.hash) then",
+        "SceneLinks.ALLOWED = { lights = true, climate = true, fans = true, blinds = true, music = true, refrigerators = true }",
+        "SceneLinks.REFUSED = { relays = true }",
+        'if type(step) ~= "table" or not SceneLinks.ALLOWED[step.type] then',
+    ),
+    "src/api/handlers/scene_links.lua": (
+        'return Problem.new(409, "SCENE_OPENS_DOORS", "A scene that opens doors or gates cannot have a link")',
+        '{ id = "link:" .. link.id, role = "member" }',
+        "if not scene or not SceneLinks.linkable(scene) or link.home ~= linkedHome() or (link.by and Keys.complete() and not Keys.find(link.by)) then",
     ),
     "src/api/handlers/remote.lua": (
         "if ctx.apiKey.remote then",

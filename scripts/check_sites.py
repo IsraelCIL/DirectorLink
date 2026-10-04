@@ -7,8 +7,9 @@
 
 Checks the published files, the Cloudflare configuration, the security headers, that the
 console uses the app's API client unchanged, and that the pages keep to the CSP (no inline
-scripts or styles, no scripts from elsewhere). Links to the source code use the short link:
-the repository's long address appears only where a machine needs it.
+scripts or styles, no scripts from elsewhere). The landing page's one script asks only for
+DirectorLink in numbers, which stays hidden until it has totals (ADR-052). Links to the source
+code use the short link: the repository's long address appears only where a machine needs it.
 """
 
 from html.parser import HTMLParser
@@ -401,10 +402,60 @@ def check_console():
                 fail(f"{rel(path)} imports {target}, which does not exist")
 
 
+# DirectorLink in numbers (ADR-052): the site's one script asks the account service for its
+# totals and nothing else, and the section stays hidden until there are totals to show.
+SITE_SCRIPT = "/numbers.js"
+STATS_URL = "https://api.directorlink.io/v1/stats"
+SCRIPT_FORBIDDEN = (
+    "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "import(",
+    "localStorage", "sessionStorage", "indexedDB", "document.cookie", "sendBeacon", "XMLHttpRequest", "WebSocket",
+)
+
+
+def check_site_numbers(pages, script, headers):
+    """pages: the site's pages ({name: html}); script: numbers.js; headers: site/_headers."""
+    for name, html in sorted(pages.items()):
+        parser = PageParser()
+        parser.feed(html)
+        expected = [SITE_SCRIPT] if name == "index.html" else []
+        if parser.scripts != expected:
+            fail(f"site/{name} may load only {expected or 'no scripts'}, not {parser.scripts}")
+    index = pages["index.html"]
+    require(index, f'<script type="module" src="{SITE_SCRIPT}"></script>', f"site/index.html must load {SITE_SCRIPT} as a module")
+    section = re.search(r'<section\b[^>]*\bid="numbers"[^>]*>', index)
+    if not section or not re.search(r"\shidden(?=[\s/>])", section.group(0)):
+        fail("site/index.html: the numbers section (#numbers) must start hidden, so that without totals nothing shows or moves")
+    for total in ("homes", "people", "downloads"):
+        require(index, f'data-total="{total}"', f"site/index.html: the numbers section needs a place for {total}")
+
+    csp = next(line for line in headers.splitlines() if line.strip().lower().startswith("content-security-policy:"))
+    directives = {}
+    for directive in csp.split(":", 1)[1].split(";"):
+        if directive.strip():
+            name, *values = directive.split()
+            directives[name] = values
+    if directives.get("script-src") != ["'self'"]:
+        fail("site/_headers CSP: script-src must be exactly 'self' (numbers.js, no inline scripts)")
+    if directives.get("connect-src") != [STATS_URL.rsplit("/v1/", 1)[0]]:
+        fail("site/_headers CSP: connect-src must be exactly https://api.directorlink.io (the totals, nothing else)")
+
+    urls = sorted(set(re.findall(r"https?://[^\s\"'`)]+", script)))
+    if urls != [STATS_URL]:
+        fail(f"site/numbers.js may ask only {STATS_URL}, nothing else ({', '.join(urls) or 'none'})")
+    require(script, "export const MIN_HOMES = 25;", "site/numbers.js must show the totals only from 25 homes (MIN_HOMES)")
+    require(script, 'credentials: "omit"', "site/numbers.js must ask without cookies")
+    for forbidden in SCRIPT_FORBIDDEN:
+        if forbidden in script:
+            fail(f"site/numbers.js must not use {forbidden}: it fills in three numbers and stores nothing")
+
+
 def check_site():
     page = check_common(SITE)
-    if page.scripts:
-        fail("site/index.html is a static page: no scripts")
+    check_site_numbers(
+        {path.relative_to(SITE).as_posix(): path.read_text(encoding="utf-8") for path in SITE.rglob("*.html")},
+        (SITE / SITE_SCRIPT.lstrip("/")).read_text(encoding="utf-8"),
+        (SITE / "_headers").read_text(encoding="utf-8"),
+    )
     html = (SITE / "index.html").read_text(encoding="utf-8")
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text)
@@ -418,9 +469,7 @@ def check_site():
     require(text, "New Pairing Code", "How it works must say where the code is made (Composer: New Pairing Code)")
     for stylesheet in page.stylesheets:
         if not stylesheet.startswith("/"):
-            fail(f"site/index.html loads a stylesheet from elsewhere ({stylesheet}); the site makes no external requests")
-    headers = (SITE / "_headers").read_text(encoding="utf-8")
-    require(headers, "script-src 'none'", "site/_headers CSP must forbid scripts (the page has none)")
+            fail(f"site/index.html loads a stylesheet from elsewhere ({stylesheet}); the site loads nothing from elsewhere")
     check_drivers()
 
 

@@ -307,9 +307,11 @@ local function run(schedule, now, note, weather)
         failed = lastRun.failed or 0,
         error = lastRun.error or Json.null,
     })
-    -- A device refused, or the scene could not run: the home's admins are alerted (ADR-047).
+    -- A device refused, or the scene could not run: the home's admins are alerted (ADR-047), with
+    -- the scene's name sealed to them (ADR-050).
     if state.services.onFailed and (lastRun.error or (lastRun.failed or 0) > 0) then
-        pcall(state.services.onFailed, now)
+        local scene = Scenes.find(schedule.scene_id)
+        pcall(state.services.onFailed, now, { what = scene and scene.name or nil })
     end
 end
 
@@ -577,7 +579,8 @@ end
 
 -- `services.runScene(sceneId, caller)` runs a saved scene and returns its result;
 -- `services.calendar` is the Jewish calendar (src/core/jewish_calendar.lua);
--- `services.onFailed(at)`, if any, is told of each run that failed (a device refused, or an error).
+-- `services.onFailed(at, { what })`, if any, is told of each run that failed (a device refused, or
+-- an error), with its scene's name.
 function Scheduler.start(services)
     state.services = services
     state.firstTick = true

@@ -4,6 +4,7 @@
 //   node --test tests/app/
 
 import assert from "node:assert/strict";
+import { createCipheriv, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
@@ -108,7 +109,8 @@ class FakeCacheStorage {
   }
 }
 
-async function startWorker({ oldCaches = [], windows = [], opened = [], shown = [] } = {}) {
+// `notifications`: what getNotifications finds (the notifications the app shows).
+async function startWorker({ oldCaches = [], windows = [], opened = [], shown = [], notifications = [] } = {}) {
   const listeners = {};
   const network = makeNetwork();
   const storage = new FakeCacheStorage();
@@ -116,7 +118,10 @@ async function startWorker({ oldCaches = [], windows = [], opened = [], shown = 
   const self = {
     location: { origin: ORIGIN },
     // Notifications the worker shows: { title, options }.
-    registration: { showNotification: async (title, options) => shown.push({ title, options }) },
+    registration: {
+      showNotification: async (title, options) => shown.push({ title, options }),
+      getNotifications: async ({ tag } = {}) => notifications.filter((item) => !tag || item.tag === tag),
+    },
     addEventListener: (type, listener) => (listeners[type] = listener),
     skipWaiting: async () => {},
     clients: {
@@ -134,6 +139,11 @@ async function startWorker({ oldCaches = [], windows = [], opened = [], shown = 
     fetch: network.fetch,
     Response,
     URL,
+    // What opens the alerts sealed to this device (ADR-050).
+    crypto: globalThis.crypto,
+    TextEncoder,
+    TextDecoder,
+    atob,
     setTimeout: fastTimers,
     clearTimeout,
   });
@@ -199,8 +209,8 @@ test("install saves every page under each path, without redirects", async () => 
 });
 
 test("activate removes caches from older versions", async () => {
-  const { storage } = await startWorker({ oldCaches: ["directorlink-shell-v24", "directorlink-shell-v32"] });
-  assert.deepEqual(await storage.keys(), ["directorlink-shell-v39"]);
+  const { storage } = await startWorker({ oldCaches: ["directorlink-shell-v24", "directorlink-shell-v32", "directorlink-shell-v39"] });
+  assert.deepEqual(await storage.keys(), ["directorlink-shell-v40"]);
 });
 
 test("online page loads come from the network and refresh the saved copy", async () => {
@@ -323,4 +333,151 @@ test("without the app's words an alert is in English, and an unreadable push sti
 test("a new version keeps the alerts' words", async () => {
   const { storage } = await startWorker({ oldCaches: ["directorlink-shell-v24", "directorlink-alerts"] });
   assert.deepEqual((await storage.keys()).sort(), ["directorlink-alerts", /CACHE_NAME = "([^"]+)"/.exec(SOURCE)[1]]);
+});
+
+// Alerts sealed to this device (ADR-050): { kind: "sealed", home, key, at, sealed }, opened with the
+// alert key js/alerts.js keeps for the worker (tests/vectors/alert.json: the driver seals the same).
+const VECTORS = JSON.parse(readFileSync(new URL("../vectors/alert.json", import.meta.url), "utf8"));
+const ALERT_KEY = Buffer.from(VECTORS.device.alert_key_hex, "hex");
+
+// A detail sealed as the driver seals it, with Node's crypto.
+function sealDetail(detail, { home = VECTORS.home, key = VECTORS.key } = {}) {
+  const hmac = (secret, data) => createHmac("sha256", secret).update(data).digest();
+  const iv = randomBytes(16);
+  const cipher = createCipheriv("aes-256-cbc", hmac(ALERT_KEY, "enc"), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(detail), "utf8"), cipher.final()]).toString("base64");
+  const ivText = iv.toString("base64");
+  return { iv: ivText, ct, mac: hmac(hmac(ALERT_KEY, "mac"), `alert v1|${home}|${key}|${ivText}|${ct}`).toString("base64") };
+}
+
+async function keepAlertKey(storage, value = { home: VECTORS.home, key: VECTORS.key, alert_key: ALERT_KEY.toString("base64") }) {
+  await (await storage.open("directorlink-alerts")).put("/alert-key.json", new Response(JSON.stringify(value)));
+}
+
+const sealedPush = (sealed, fields = {}) => ({ kind: "sealed", home: VECTORS.home, key: VECTORS.key, at: AT, sealed, ...fields });
+const sealedClock = (at, lang = "en") => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at));
+const GENERAL = "Your home – something needs your attention. Open the app to see what happened.";
+
+test("the shared vectors are what Node's crypto makes", () => {
+  const hmac = (secret, data) => createHmac("sha256", secret).update(data).digest();
+  const lock = hmac(Buffer.from(VECTORS.device.api_key, "utf8"), "DirectorLink e2e v1");
+  assert.equal(lock.toString("hex"), VECTORS.device.lock_key_hex);
+  assert.equal(hmac(lock, "DirectorLink alert v1").toString("hex"), VECTORS.device.alert_key_hex);
+  assert.equal(hmac(ALERT_KEY, "enc").toString("hex"), VECTORS.device.enc_key_hex);
+  assert.equal(hmac(ALERT_KEY, "mac").toString("hex"), VECTORS.device.mac_key_hex);
+  for (const detail of VECTORS.details) {
+    const cipher = createCipheriv("aes-256-cbc", hmac(ALERT_KEY, "enc"), Buffer.from(detail.iv_hex, "hex"));
+    const ct = Buffer.concat([cipher.update(detail.plaintext, "utf8"), cipher.final()]).toString("base64");
+    const iv = Buffer.from(detail.iv_hex, "hex").toString("base64");
+    const mac = hmac(hmac(ALERT_KEY, "mac"), `alert v1|${VECTORS.home}|${VECTORS.key}|${iv}|${ct}`).toString("base64");
+    assert.deepEqual({ iv, ct, mac }, detail.sealed, detail.name);
+  }
+});
+
+test("a sealed alert opens with this device's alert key and says what happened, in the app's words", async () => {
+  const shown = [];
+  const opened = [];
+  const { storage, push, notificationClick } = await startWorker({ shown, opened });
+  await keepAlertKey(storage);
+  const [ring, door] = VECTORS.details;
+
+  await push(sealedPush(ring.sealed));
+  assert.equal(shown[0].title, "Someone is at the door");
+  assert.equal(shown[0].options.body, `שער הכניסה rang at ${sealedClock("2026-10-03T05:00:00Z")}.`, "the doorbell's name, and the ring's time");
+  assert.equal(shown[0].options.tag, "doorbell-93", "the tag of the app's own ring notification");
+  assert.equal(shown[0].options.renotify, true);
+  assert.equal(shown[0].options.data.ring, "2026-10-03T05:00:00Z");
+  await notificationClick(shown[0].options.data);
+  assert.deepEqual(opened, [`${ORIGIN}/#/`], "a ring opens Home, where its banner is");
+
+  await push(sealedPush(door.sealed));
+  assert.equal(shown[1].title, "DirectorLink");
+  assert.equal(shown[1].options.body, `Main Door was opened by Dana (Dana's iPhone), with the scene Good night, at ${sealedClock("2026-10-03T05:01:00Z")}.`);
+  assert.equal(shown[1].options.tag, "door-70");
+  assert.equal(shown[1].options.data.url, "/#/settings/history");
+
+  const at = "2026-10-03T06:30:00Z";
+  for (const [detail, body, tag, url] of [
+    [{ kind: "door_opened", action: "pulse", id: 70, name: "Main Door", who: { type: "control4" } }, `Main Door was opened in Control4 at ${sealedClock(at)}.`, "door-70", "/#/settings/history"],
+    [{ kind: "door_opened", action: "hold", id: 70, name: "Main Door", who: { type: "key", name: "Kids phone", profile: "Kids phone" } }, `Main Door was held open by Kids phone at ${sealedClock(at)}.`, "door-70", "/#/settings/history"],
+    [{ kind: "door_opened", action: "doorbell", id: 93, name: "Front Gate", who: { type: "key" } }, `Front Gate was opened by a removed device at ${sealedClock(at)}.`, "door-93", "/#/settings/history"],
+    [{ kind: "fridge_door", id: 500, name: "Refrigerator", room_id: 10, minutes: 5 }, `Refrigerator – the door has been open for at least 5 min (${sealedClock(at)}).`, "fridge-500", "/#/room/10"],
+    [{ kind: "fridge_door", id: 500, name: "Refrigerator" }, `Refrigerator – the door was left open (${sealedClock(at)}).`, "fridge-500", "/#/"],
+    [{ kind: "schedule_failed", name: "Morning blinds" }, `Your home – the schedule for Morning blinds had a problem at ${sealedClock(at)}. Open the app to see what happened.`, `alert-schedule_failed-${VECTORS.home}`, "/#/settings/history"],
+    [{ kind: "schedule_failed" }, `Your home – a schedule had a problem at ${sealedClock(at)}. Open the app to see what happened.`, `alert-schedule_failed-${VECTORS.home}`, "/#/settings/history"],
+    [{ kind: "sprinklers", name: "Garden" }, GENERAL, `alert-other-${VECTORS.home}`, "/#/settings/history"],
+  ]) {
+    await push(sealedPush(sealDetail({ v: 1, at, ...detail })));
+    const last = shown.at(-1);
+    assert.equal(last.options.body, body, detail.kind);
+    assert.equal(last.options.tag, tag, detail.kind);
+    assert.equal(last.options.data.url, url, detail.kind);
+  }
+});
+
+test("a sealed alert's words follow the app's language", async () => {
+  const shown = [];
+  const { storage, push } = await startWorker({ shown });
+  await keepAlertKey(storage);
+  await (await storage.open("directorlink-alerts")).put("/alert-texts.json", new Response(JSON.stringify({
+    lang: "he",
+    dir: "rtl",
+    title: "DirectorLink",
+    doorbell_title: "מישהו בדלת",
+    doorbell: "צלצול ב-{name} ב-{time}.",
+    door_opened_control4: "פתיחה של {name} דרך Control4 ב-{time}.",
+  })));
+  await push(sealedPush(VECTORS.details[0].sealed));
+  assert.equal(shown[0].title, "מישהו בדלת");
+  assert.equal(shown[0].options.body, `צלצול ב-שער הכניסה ב-${sealedClock("2026-10-03T05:00:00Z", "he")}.`);
+  assert.equal(shown[0].options.dir, "rtl");
+  await push(sealedPush(sealDetail({ v: 1, kind: "door_opened", at: AT, id: 70, name: "Main Door", who: { type: "control4" } })));
+  assert.equal(shown[1].options.body, `פתיחה של Main Door דרך Control4 ב-${sealedClock(AT, "he")}.`);
+});
+
+test("a sealed alert this device cannot open shows the general words", async () => {
+  const shown = [];
+  const { storage, push } = await startWorker({ shown });
+  const [ring] = VECTORS.details;
+  await push(sealedPush(ring.sealed));
+  await keepAlertKey(storage);
+  const changed = ring.sealed.mac.startsWith("A") ? `B${ring.sealed.mac.slice(1)}` : `A${ring.sealed.mac.slice(1)}`;
+  await push(sealedPush({ ...ring.sealed, mac: changed }));
+  await push(sealedPush(ring.sealed, { key: "0badc0de" }));
+  await push(sealedPush(ring.sealed, { home: "ffeeddccbbaa99887766554433221100" }));
+  await push(sealedPush({ iv: "x", ct: "y", mac: "z" }));
+  await push(sealedPush(sealDetail({ v: 1, kind: "doorbell", at: AT, id: 93 })));
+  await keepAlertKey(storage, { home: VECTORS.home, key: VECTORS.key, alert_key: Buffer.alloc(32, 1).toString("base64") });
+  await push(sealedPush(ring.sealed));
+  assert.deepEqual(
+    shown.map((item) => item.options.body),
+    Array(7).fill(GENERAL),
+    "no key kept, a changed MAC, another key, another home, nothing sealed, a doorbell without a name, another device's key"
+  );
+  assert.deepEqual(shown.map((item) => item.options.data.url), Array(7).fill("/#/settings/history"));
+});
+
+test("a ring the app already shows, or shows on its banner now, is shown again quietly", async () => {
+  const shown = [];
+  const [ring] = VECTORS.details;
+  // The app showed this ring itself (js/doorbells.js), with the same tag.
+  const notifications = [{ tag: "doorbell-93", data: { url: "/#/", ring: "2026-10-03T05:00:00Z" } }];
+  const windows = [];
+  const { storage, push } = await startWorker({ shown, notifications, windows });
+  await keepAlertKey(storage);
+  await push(sealedPush(ring.sealed));
+  assert.equal(shown.length, 1, "every push shows a notification");
+  assert.equal(shown[0].options.silent, true);
+  assert.equal(shown[0].options.renotify, false, "in place of the app's, without a sound");
+
+  // Another ring: it alerts.
+  notifications.length = 0;
+  await push(sealedPush(sealDetail({ v: 1, kind: "doorbell", at: "2026-10-03T05:03:00Z", id: 93, name: "Front Gate" })));
+  assert.equal(shown[1].options.renotify, true);
+  assert.equal(shown[1].options.silent, undefined);
+
+  // The app is open in front: its banner shows the ring.
+  windows.push({ url: `${ORIGIN}/#/`, focused: true, visibilityState: "visible", focus: async () => {}, postMessage: () => {} });
+  await push(sealedPush(sealDetail({ v: 1, kind: "doorbell", at: "2026-10-03T05:05:00Z", id: 93, name: "Front Gate" })));
+  assert.equal(shown[2].options.silent, true);
 });

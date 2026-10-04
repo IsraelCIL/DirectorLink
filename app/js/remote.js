@@ -341,6 +341,21 @@ export function decideJoinRequest(homeId, requestId, decision) {
   return post(`/v1/homes/${homeId}/join-requests/${requestId}`, { decision });
 }
 
+// Joining from another device (ADR-053, views/device-join.js): requests of this account to join
+// one of its homes, which another device of the account approves. Each answers the request as
+// both devices see it: { id, home_id, label, status, commitment, approver_key, device_key,
+// created_at, expires_at }; the sealed invitation only once, to `collect`.
+const deviceRequests = (homeId) => `/v1/homes/${homeId}/device-requests`;
+
+export const startDeviceRequest = (homeId, label, commitment) => post(deviceRequests(homeId), { label, commitment });
+export const listDeviceRequests = (homeId) => send("GET", deviceRequests(homeId));
+export const getDeviceRequest = (homeId, id) => send("GET", `${deviceRequests(homeId)}/${id}`);
+export const answerDeviceRequest = (homeId, id, approverKey) => post(`${deviceRequests(homeId)}/${id}/answer`, { approver_key: approverKey });
+export const showDeviceKey = (homeId, id, deviceKey) => post(`${deviceRequests(homeId)}/${id}/key`, { device_key: deviceKey });
+export const approveDeviceRequest = (homeId, id, sealed) => post(`${deviceRequests(homeId)}/${id}/approve`, { sealed });
+export const collectDeviceRequest = (homeId, id) => post(`${deviceRequests(homeId)}/${id}/collect`);
+export const deleteDeviceRequest = (homeId, id) => send("DELETE", `${deviceRequests(homeId)}/${id}`);
+
 // The invitation link a person or device opens. Everything after "#" stays in the browser.
 export function invitationLink(homeId, invitation) {
   return `${window.location.origin}/#/join/${homeId}.${invitation.id}.${invitation.secret}`;

@@ -12,15 +12,18 @@ Since DirectorLink 0.10.0 (protocol version 1) signed-in accounts reach their ho
 - `src/invitations.js` — tombstones for invitations whose email or creator goes, and the daily purge
 - `src/member-keys.js` — which account uses which key id; the controller's `keys` list ends the membership of accounts whose keys are all revoked
 - `src/backups.js` — automatic backups (1.6.0, ADR-048): the controller's sealed backup, received in chunks over its socket and kept in D1 (one a day, the last 7, 5 MB a home, 25 MB an owner's homes, 4 starts a home a day besides the nightly one); listed, downloaded and deleted by the home's admins
-- `src/alerts.js` — alerts to a home's admins (ADR-047): their browsers' push subscriptions, who is an admin, the offline alarm and the controller's `alert` messages
+- `src/device-requests.js` — a new device joins by approval from another device of the account (1.7.0, ADR-053): the requests, the keys the two devices pass each other and the sealed invitation, for 10 minutes
+- `src/alerts.js` — alerts (ADR-047, ADR-050): browsers' push subscriptions and the key each registered with, who is an admin, the offline alarm, the controller's sealed `notify` messages and the `alert` messages of drivers before 1.7.0
+- `src/scene-links.js` — scene links (1.7.0, ADR-051): `/run/{home_id}.{link_id}`, the page a browser gets and the POST a phone's automation sends with the link's secret, passed to the home's object (`HomeRelay.link`)
 - `src/web-push.js` — Web Push: the message encrypted for the browser (RFC 8291) and the VAPID signature (RFC 8292), with WebCrypto
+- `src/stats.js` — DirectorLink in numbers (1.7.0, ADR-052): the hourly count of three totals and the public `GET /v1/stats`
 - `src/http.js` — JSON and Problem Details responses, constant-time secret comparison, cookies, random tokens
 - `src/accounts.js` — accounts (docs/ACCOUNTS.md): sign-in, sessions, sign-out, deleting the account, and accounts left without a sign-in
 - `src/google.js` — Google's authorization-code flow with PKCE
 - `src/apple.js` — Sign in with Apple: the posted answer, the ES256 client secret, and the check of Apple's notifications
 - `src/apple-notifications.js` — Apple's server-to-server notifications about its accounts (ADR-041)
 - `src/jwt.js` — ID token checks shared by both (signature, issuer, audience, expiry, nonce), and Apple's and Google's signing keys, cached
-- `migrations/` — the D1 schema: `0001` `users`, `sessions`, `sign_ins`; `0002` `homes`, `members`, `invitations`; `0003` `identities` (Google and Apple for one account); `0004` `member_keys` (which account uses which key id); `0005` `join_requests` (invitations accepted with another email, waiting for the owner); `0006` `push_subscriptions` (alerts, 1.6.0); `0007` `backups`, `backup_chunks` (automatic backups, sealed; 1.6.0)
+- `migrations/` — the D1 schema: `0001` `users`, `sessions`, `sign_ins`; `0002` `homes`, `members`, `invitations`; `0003` `identities` (Google and Apple for one account); `0004` `member_keys` (which account uses which key id); `0005` `join_requests` (invitations accepted with another email, waiting for the owner); `0006` `push_subscriptions` (alerts, 1.6.0); `0007` `backups`, `backup_chunks` (automatic backups, sealed; 1.6.0); `0008` the key id each push subscription registered with, and whether it wants the offline alert (alerts sealed to keys, 1.7.0); `0009` `device_requests`, `device_request_starts` (joining from another device; 1.7.0); `0010` `stats` (DirectorLink in numbers; 1.7.0)
 - `wrangler.jsonc` — Worker `directorlink-api`, the `HOME_RELAY` binding (SQLite-backed class, migration `v1`), the `api.directorlink.io` custom domain
 - `.dev.vars` (git-ignored) — secrets for `wrangler dev`
 
@@ -51,6 +54,7 @@ The test endpoints are version 0's: they need `Authorization: Bearer <TEST_TOKEN
 | 400 | `WEBSOCKET_REQUIRED` | `/relay/connect` without `Upgrade: websocket` |
 | 400 | `INVALID_HOME_ID` | `X-DirectorLink-Home` or `{home_id}` is not 32 lowercase hex characters |
 | 400 | `INVALID_HOME_SECRET` | `Authorization` is not `Bearer <64 hex characters>` |
+| 400 | `SECRET_REQUIRED` | a scene link's POST without a secret (below) |
 | 401 | `WRONG_HOME_SECRET` | another secret is registered for this `home_id` |
 | 401 | `UNAUTHORIZED` | a test endpoint without the right token |
 | 404 | `NOT_FOUND` | any other path |
@@ -80,17 +84,17 @@ node scripts/relay_smoke.mjs get "/v1/lights?room_id=10" --home <home_id> --toke
 
 Tests: `node --test tests/cloud/*.test.mjs` (CI runs them too, `.github/workflows/validate.yml`). `frames.test.mjs` checks the smoke script's WebSocket code against a fake relay, and `jwt.test.mjs` the signing-key cache, in Node. `relay.test.mjs` (and the accounts, Apple, homes and backups tests) run the Worker end to end in `wrangler dev` on a free port, from a temporary copy of this folder with its own `.dev.vars`, so your `.dev.vars` and `.wrangler/` are left alone; its first run needs network access for `npx`.
 
-## Alerts (1.6.0, ADR-047)
+## Alerts (1.6.0, ADR-047; 1.7.0, ADR-050)
 
-Web Push notifications to a home's admins, for two things only: the home has been offline for 10 minutes, or a schedule failed (`src/alerts.js`, `src/web-push.js`; docs/ACCOUNTS.md, *6. Alerts*). Session, CORS and origin rules as for Homes, below.
+Web Push notifications (`src/alerts.js`, `src/web-push.js`; docs/ACCOUNTS.md, *6. Alerts*): what the controller alerts about (a doorbell rang, a door or gate was opened, the refrigerator's door was left open, a schedule failed), sealed by it to each key that gets it, which the cloud delivers without reading; and the cloud's own alert to the admins when the home has been offline for 10 minutes. Session, CORS and origin rules as for Homes, below.
 
 | Request | Answer |
 | --- | --- |
 | `GET /v1/homes/{home_id}/alerts` | members: `{"public_key"}`, the VAPID key browsers subscribe with; 503 `ALERTS_NOT_CONFIGURED` until the key pair is set, or when its two halves do not belong together |
-| `POST /v1/homes/{home_id}/alerts` | `{ endpoint, keys: { p256dh, auth } }` (the browser's `PushSubscription.toJSON()`): 201 `{"alerts": true}`, this browser gets the home's alerts. 403 `ADMIN_ONLY` (the account uses none of the home's admin keys, as far as the cloud knows), 403 `NOT_A_MEMBER`, 409 `ROLES_UNKNOWN` (the controller has not listed its admin keys: DirectorLink before 1.6.0), 400 `INVALID_SUBSCRIPTION` (not a push service's https address, or not a P-256 key and a 16-byte secret) |
+| `POST /v1/homes/{home_id}/alerts` | `{ endpoint, keys: { p256dh, auth }, key_id, offline }` (the browser's `PushSubscription.toJSON()`, the key id its device uses at the home, and whether it wants the offline alert, true unless false): 201 `{"alerts": true}`, this browser gets that key's alerts, and the offline alert while it is an admin key. 403 `KEY_NOT_LINKED` (the account has not used that key at the home, as far as the cloud knows: the app sends one sealed request through the account and tries again). Without `key_id` (apps before 1.7.0) the admins' alerts: 403 `ADMIN_ONLY` (the account uses none of the home's admin keys), 409 `ROLES_UNKNOWN` (the controller has not listed its admin keys: DirectorLink before 1.6.0). 403 `NOT_A_MEMBER`, 400 `INVALID_SUBSCRIPTION` (not a push service's https address, not a P-256 key and a 16-byte secret, or a key id that is not 8 hex characters) |
 | `DELETE /v1/homes/{home_id}/alerts` | `{ endpoint }`: 204, it no longer does |
 
-How it works: the controller's `keys` message lists its admin key ids (`admins`), which the home's Durable Object keeps; an account that uses one of them (`member_keys`) is an admin there. A browser's subscription (`push_subscriptions`, migration `0006`) goes with the account's membership (leaving, being removed, another account claiming the home), the account (deleted, or Apple ending its only sign-in), signing out everywhere, and a 404 or 410 from the push service; each of these tells the home's object (`homesChanged`). Only while an admin's browser is subscribed does the object set alarms: 10 minutes after the driver disconnects, and every 10 minutes while it is connected, to see that it is still heard (a socket that went quiet counts as away since the driver was last heard); while connected it also asks D1 again every hour, and stops once nobody is subscribed. One offline alert per absence; a driver back within the 10 minutes ends it. An offline alert that reached no push service (D1 failed, the service was unreachable, answered 429 or 5xx) is sent again a minute later, to the browsers it missed, 4 sends at most; a redirect is never followed. A deploy records no disconnect: the absence then counts from the first alarm that finds no driver. The controller's `{"type":"alert","kind":"schedule_failed","at"}` goes to the admins at most three times an hour. Each alert is `{kind, home, at}`, padded to 128 bytes so that every alert is the same size, encrypted for each browser (RFC 8291, aes128gcm) and signed with the VAPID key (RFC 8292, ES256); the words are the app's (`app/sw.js`). Push addresses are taken only from the push services' hosts, on HTTPS's own port.
+How it works: the controller's `keys` message lists its admin key ids (`admins`), which the home's Durable Object keeps; an account that uses one of them (`member_keys`) is an admin there. A browser's subscription (`push_subscriptions`, migration `0006`) goes with the account's membership (leaving, being removed, another account claiming the home), the account (deleted, or Apple ending its only sign-in), signing out everywhere, and a 404 or 410 from the push service; each of these tells the home's object (`homesChanged`). Only while an admin's browser is subscribed does the object set alarms: 10 minutes after the driver disconnects, and every 10 minutes while it is connected, to see that it is still heard (a socket that went quiet counts as away since the driver was last heard); while connected it also asks D1 again every hour, and stops once nobody is subscribed. One offline alert per absence; a driver back within the 10 minutes ends it. An offline alert that reached no push service (D1 failed, the service was unreachable, answered 429 or 5xx) is sent again a minute later, to the browsers it missed, 4 sends at most; a redirect is never followed. A deploy records no disconnect: the absence then counts from the first alarm that finds no driver. The offline alert goes to browsers registered with an admin key that want it, and to those registered without a key (apps before 1.7.0) by an account with an admin key. A 1.6.0 controller's `{"type":"alert","kind":"schedule_failed","at"}` goes to the admins' browsers, registered either way, at most three times an hour. The controller's `{"type":"notify","at","for":{<key id>: {iv, ct, mac}},"brief"?}` (1.7.0, docs/RELAY.md) goes at once, without an alarm, each part to the browsers registered with its key id by an account that uses that key at the home (`member_keys`), as `{kind: "sealed", home, key, at, sealed}`; `brief` (a ring) is kept by the push service 60 s, the others 12 hours; at most 60 notify messages a home an hour and 50 keys in one. A key gone from the controller's `keys` takes its browsers' registrations with it. The cloud's own alerts are `{kind, home, at}`. Every push is padded to 1,024 bytes so that all are the same size, encrypted for each browser (RFC 8291, aes128gcm) and signed with the VAPID key (RFC 8292, ES256), Urgency high; the words are the app's (`app/sw.js`), which opens a sealed one with the device's alert key. Push addresses are taken only from the push services' hosts, on HTTPS's own port.
 
 Settings: `VAPID_PUBLIC_KEY` (a var in `wrangler.jsonc`), `VAPID_PRIVATE_KEY` (a secret: the private key as a JWK), optionally `VAPID_SUBJECT` (a var: the contact push services see; `https://directorlink.io` by default). Make the pair once, from this folder; the script writes the private key only into the pipe (it refuses a terminal) and shows the public key:
 
@@ -102,17 +106,63 @@ Then put the public key it printed in `wrangler.jsonc` (`vars.VAPID_PUBLIC_KEY`)
 
 For `wrangler dev` and the tests, `.dev.vars` may set `OFFLINE_ALERT_MINUTES` (default 10; the tests use 0.1), `ALERT_SILENCE_SECONDS` (default 60: how long a driver may go unheard on its socket before it counts as away, where the relay has no stale rule of its own), `ALERT_RETRY_SECONDS` (default 60: when an offline alert that did not get through is sent again; the tests use 1) and `PUSH_TEST_URL` (the tests' fake push service, accepted besides the real ones; never set in production).
 
-Logs: `alerts_subscribed`, `alerts_unsubscribed`, `alerts_refused`, `alerts_stopped` (no admin's browser is subscribed any more), `alerts_change_not_told`, `alert_sent` (`kind`, `at`, `devices`, `delivered`, `gone`, the other statuses as `failed`, and how many are sent `again`), `alert_retry`, `alert_not_sent`, `alert_limited`, `alert_ignored`, `alert_failed`, `alerts_not_configured`, `alert_alarm_failed`. A push address is never logged, only its service's host name.
+Logs: `alerts_subscribed`, `alerts_unsubscribed`, `alerts_refused`, `alerts_stopped` (no admin's browser is subscribed any more), `alerts_change_not_told`, `alert_sent` (`kind`, `at`, `devices`, `delivered`, `gone`, the other statuses as `failed`, and how many are sent `again`), `alert_retry`, `alert_not_sent`, `alert_limited`, `alert_ignored`, `alert_failed`, `alerts_not_configured`, `alert_alarm_failed`; for sealed alerts `notify_sent` (`at`, `keys`, `brief`, `devices`, `delivered`, `gone`, `failed`), `notify_ignored`, `notify_limited`, `notify_failed`, never what one is about. A push address is never logged, only its service's host name.
 
-Cost: a home with a subscribed admin costs up to 144 alarms a day while its driver is connected (each a Durable Object request and a row written, about 4,300 of each a month), 24 D1 reads a day, and the few seconds each wake keeps the object in memory; each alert, one D1 read and one request per browser to its push service. Homes without one cost nothing more.
+Cost: a home with a subscribed admin costs up to 144 alarms a day while its driver is connected (each a Durable Object request and a row written, about 4,300 of each a month), 24 D1 reads a day, and the few seconds each wake keeps the object in memory; each alert, one D1 read and one request per browser to its push service, and each sealed one a storage write for the hourly count. Homes without one cost nothing more.
 
-Tests: `web-push.test.mjs` (in Node: RFC 8291's test vector, the padding, the VAPID header, the settings check, which addresses and keys are taken, redirects, `scripts/vapid_key.mjs`), `alerts-alarm.test.mjs` (in Node, with a fake storage and a fake D1 that fails: tries again, asking D1 again, stopping) and `alerts.test.mjs` (end to end, with a fake push service, `fake-push.mjs`, that checks each push's VAPID signature and opens it with the browser's key, and can fail or redirect).
+Tests: `web-push.test.mjs` (in Node: RFC 8291's test vector, the padding, the VAPID header, the settings check, which addresses and keys are taken, redirects, `scripts/vapid_key.mjs`), `alerts-alarm.test.mjs` (in Node, with a fake storage and a fake D1 that fails: tries again, asking D1 again, stopping) and `alerts.test.mjs` (end to end, with a fake push service, `fake-push.mjs`, that checks each push's VAPID signature and opens it with the browser's key, and can fail or redirect; sealed alerts only to the keys they name and the accounts that use them, the hourly limit, registrations before 1.7.0).
+
+## DirectorLink in numbers (1.7.0, ADR-052)
+
+Three totals for the website, counted once an hour (`src/stats.js`; docs/ACCOUNTS.md, *What is public*):
+
+| Request | Answer |
+| --- | --- |
+| `GET /v1/stats` | `{"homes", "people", "downloads", "updated"}`: homes linked to an account, accounts someone can sign in to, downloads of `DirectorLink.c4z` over all GitHub releases, and when the oldest of the three was counted (ISO time). No cookie, no key; `Cache-Control: public, max-age=300`; CORS without credentials for `SITE_ORIGINS`. 503 `STATS_NOT_COUNTED` until all three have been counted once, 503 `STATS_UNAVAILABLE` when D1 cannot be read; 405 for anything but GET (and OPTIONS) |
+
+The second cron trigger, `47 * * * *` (`STATS_CRON` in `src/stats.js`, which must match `wrangler.jsonc` character for character: `scheduled` tells the hourly count from the daily housekeeping by `event.cron`), counts homes and people in one D1 batch and asks GitHub's releases list (`/repos/IsraelCIL/DirectorLink/releases?per_page=100&page=N`, at most 10 pages, with a User-Agent) for the downloads. Each total is kept in `stats` (migration `0010`) with its time; a part that fails (D1, or GitHub unreachable, refusing, limited, or answering something else) leaves its total and time as they were. The website (`site/numbers.js`) shows the totals only from 25 homes.
+
+Settings: `SITE_ORIGINS` (a var: the website's origins, `https://directorlink.io,https://www.directorlink.io`). Optional: `GITHUB_TOKEN` (a secret: GitHub allows 60 requests an hour per address without one, and Workers share addresses; a fine-grained token with no permissions is enough), `GITHUB_API_URL` (`.dev.vars` only: a fake GitHub for `wrangler dev` and the tests). Locally, with `wrangler dev --test-scheduled`: `curl "http://localhost:8787/__scheduled?cron=47+*+*+*+*"`.
+
+Logs: `stats_counted` (`homes`, `people`, `downloads`; `null` for a total not counted this hour), `stats_not_counted` (`totals`, `error`, and GitHub's `status`, `page` and `rate_limit_remaining`), `stats_unavailable`.
+
+Cost: 24 runs a day, each two or three requests to GitHub and two D1 writes; one D1 read of three rows per answer (browsers keep it 5 minutes).
+
+Tests: `stats-count.test.mjs` (in Node: the sum over pages and only the package, failures keeping the totals, the answer, CORS and caching) and `stats.test.mjs` (end to end with a fake GitHub: claimed homes only, deleted accounts and accounts without a sign-in not counted, the hourly and daily triggers apart).
+
+## Scene links (1.7.0, ADR-051)
+
+A private link per scene for the phone's own automations (docs/SCENES.md). No session, no CORS: the
+link is the permission.
+
+| Request | Answer |
+| --- | --- |
+| `GET /run/{home_id}.{link_id}` (and `HEAD`) | A small page with one Run button, the same for every address (a made-up one too): it runs nothing, since link previews fetch links. Its script reads the secret after `#`, which the browser never sends, and posts it. `no-store`, `noindex`, `no-referrer`, a CSP with a nonce. |
+| `POST /run/{home_id}.{link_id}` | The secret in the body: `{"secret": "…"}`, a form field `secret` (url-encoded or multipart), or the secret alone as text (at most 1 KB). `200 {"result": "ran" \| "partly" \| "failed" \| "nothing", "message"}`; `400 SECRET_REQUIRED`; `404 NOT_FOUND` for an unknown home (or one no account has claimed), link or secret, word for word alike; `429 TOO_MANY_RUNS` (`Retry-After`); `503 HOME_OFFLINE` (so a claimed home's id shows whether it is online: the family needs to know); `502 HOME_DISCONNECTED`, `HOME_FAILED`; `504 HOME_TIMEOUT`. Any other method: 405. |
+
+How it works: the Worker checks the address and the secret's shape (40 hex digits), reads D1 once to
+see that an account has claimed the home, and hands `{link, secret}` and the phone's address
+(`CF-Connecting-IP`, as `X-DirectorLink-Client`) to the home's object (`/link`). The object answers
+429 to an address (an IPv6 one by its /64) whose runs it answered 404 ten times in 10 minutes, until
+the first of those is 10 minutes old, before it counts against the home (so one stranger guessing
+cannot keep the family's runs at 429; at most 1,000 addresses a home, in memory, never logged); it
+lets at most 30 runs a minute reach the home (in memory; a flood keeps it awake), and sends `{"type":"link","id","link","secret"}` (docs/RELAY.md) only to a driver whose
+`hello` listed `features: ["scene_links"]` (DirectorLink 1.7.0): an older driver would never
+answer, so the phone gets 404 at once. The driver's `link_result` becomes the answer above; its
+`RATE_LIMITED` (6 runs a minute a link) becomes 429 with its `retry_s`.
+
+The secret stays out of the logs: it is never in the address (Workers Logs record each request's
+method and URL), and `link_run` logs only the home, the link's id, the status, the result word, why
+and how long (Workers Logs keeps them some days: the privacy page and docs/ACCOUNTS.md say so).
+`scene-links.test.mjs` checks the forms the apps send (multipart with a case-sensitive boundary too),
+that a GET runs nothing, the 404s alike, an older driver, offline, the three limits, and that the
+Worker's output never holds a secret.
 
 ## Deploying (by hand for now)
 
 ```bash
 cd cloud
-npx wrangler@4.143.0 d1 migrations apply directorlink --remote   # new tables first (1.6.0: 0006_push_subscriptions, 0007_cloud_backups)
+npx wrangler@4.143.0 d1 migrations apply directorlink --remote   # new tables first (1.6.0: 0006_push_subscriptions, 0007_cloud_backups; 1.7.0: 0008_alert_keys, 0009_device_requests, 0010_stats)
 node ../scripts/vapid_key.mjs | npx wrangler@4.143.0 secret put VAPID_PRIVATE_KEY   # once (1.6.0, alerts): then the public key, below
 npx wrangler@4.143.0 deploy                   # Worker, Durable Object migration v1, custom domain api.directorlink.io
 curl https://api.directorlink.io/health
@@ -132,7 +182,7 @@ The migrations go before the Worker that uses them. The VAPID key pair is made o
 
 - Trust on first use: the first secret that connects with a `home_id` owns its connection (who may use the home is decided by the claim and the device keys). The driver makes up its `home_id` (128 random bits), so only someone who learned it before the driver's first connection could take it. The home's owner can replace its secret (the app's **Replace the remote secret**, `POST /v1/homes/{home_id}/secret`); otherwise a registration cannot be reset short of deleting the object's storage, and a driver that loses its identity, or is reset (Composer: Reset Remote Identity), simply creates a new `home_id`.
 - A WebSocket message may be at most 32 MiB: a binary answer larger than about 24 MiB (as `body_base64`) makes the runtime close the driver's connection (1009), and the caller gets 502.
-- No rate limiting yet, except for automatic backups.
+- No rate limiting yet, except for automatic backups and requests from new devices (3 open per account, 10 started an hour).
 - Automatic backups: at most 5 MB a home in D1 (each at most 3 MB; a big home's is about 175 KB) and 25 MB an owner's homes together, one a day is kept, however often an admin backs up, and a home starts at most 4 a day besides its nightly one. How many homes an account may claim is not limited; each account's backups are.
 
 ## Accounts
@@ -146,11 +196,11 @@ The migrations go before the Worker that uses them. The VAPID key pair is made o
 | `GET /auth/apple/start?return_to=<app URL>` | 302 to Apple (`response_mode=form_post`); sets the 10-minute `__Host-dl_signin_apple` cookie (`SameSite=None`: Apple's answer is a POST from its site). 503 `SIGN_IN_NOT_CONFIGURED` until the Apple settings exist |
 | `POST /auth/apple/callback` | Apple's form comes here; 303 to `return_to` with the same outcomes as Google's |
 | `POST /auth/apple/notifications` | Apple's server-to-server notifications (ADR-041): `{"payload": "<JWT>"}` signed with Apple's keys, issuer Apple, audience `APPLE_APP_ID` (the primary App ID). `consent-revoked`, `account-deleted` (older documents: `account-delete`, also accepted): that Apple sign-in goes, and an account left without one is signed out everywhere. After `consent-revoked` it stays as it was for the same Apple ID to come back; after `account-deleted` it keeps nothing of the person: without a home it is deleted, with one it stays for the home without name and email, outside other homes (homes, their members and keys stay). `email-disabled`, `email-enabled`: the stored address follows Apple's. 200 `{"ok": true}` (also for an Apple ID with no account, or a notice from before the person's last sign-in); 400 `INVALID_REQUEST` / `INVALID_NOTIFICATION` (the log line names the refused audience); 503 `NOTIFICATIONS_NOT_CONFIGURED` without `APPLE_APP_ID`, `PROVIDER_UNREACHABLE` when Apple's keys cannot be read |
-| `GET /v1/me` | `{"id", "email", "name", "created_at", "providers", "sign_in_providers"}` (`providers`: the account's, `google`, `apple`; `sign_in_providers`: those set up here), or 401 `NOT_SIGNED_IN` |
+| `GET /v1/me` | `{"id", "email", "name", "created_at", "providers", "sign_in_providers", "device_requests"}` (`providers`: the account's, `google`, `apple`; `sign_in_providers`: those set up here; `device_requests: true`: this server takes requests from new devices, 1.7.0), or 401 `NOT_SIGNED_IN` |
 | `DELETE /v1/me/identities/{google\|apple}` | 204: the account no longer signs in with that provider; 409 `LAST_SIGN_IN` for its only one, 409 `SIGN_IN_HELD_ELSEWHERE` (nothing changed) when another account began with the one it would keep |
 | `DELETE /v1/me` | 204; the account and all its sessions are deleted |
 | `POST /auth/logout` | 204; this session ends |
-| `POST /auth/logout?everywhere=1` | 204; every session of the account ends, on every device |
+| `POST /auth/logout?everywhere=1` | 204; every session of the account ends, on every device, with its browsers' alerts and its new devices' requests to join |
 
 ## Homes
 
@@ -169,6 +219,23 @@ The migrations go before the Worker that uses them. The VAPID key pair is made o
 | `POST /v1/homes/{home_id}/join-requests/{id}` | the owner only: `{ "decision": "approve" \| "refuse" }` → `{"id", "status", "decided_at"}`; 404 `NOT_FOUND` once the invitation was used, revoked or expired |
 | `GET /v1/homes/{home_id}/members` | the owner only: `{"items": [{"user_id", "email", "name", "owner", "added_at", "key_ids"}]}`; `key_ids`: the home's API keys this account uses, as far as the cloud has seen (the key an invitation made, and each key the home accepted a sealed request with) |
 | `DELETE /v1/homes/{home_id}/members/{user_id}` | 204: the owner removes someone, or anyone leaves (the owner cannot, 409) |
+
+### Joining from another device (1.7.0, ADR-053)
+
+A device signed in to the account, without a key for one of its homes (the iPhone's Home Screen app, which keeps its own storage and gets no links), asks; a device of the same account that holds a key there approves it with a for-me invitation sealed to the new device (docs/ACCOUNTS.md, *Join from another device*). `src/device-requests.js`, D1 `device_requests` (migration `0009`). Each answer about a request is `{"id", "home_id", "label", "status", "commitment", "approver_key", "device_key", "created_at", "expires_at"}`; `status` is `waiting`, `answered` (a device sent its key), `checking` (the new device showed its key) or `approved`. Only the account's own sessions see or change its requests: another account gets 404.
+
+| Request | Answer |
+| --- | --- |
+| `POST /v1/homes/{home_id}/device-requests` | `{ label, commitment }`: what the device calls itself (at most 48 characters; control and direction marks are taken out) and the SHA-256 (hex) of `"DirectorLink device join v1\|commit\|" + its public key (base64)`. 201 with the request, for 10 minutes. 403 `NOT_A_MEMBER`; 409 `NO_APPROVER` (the account uses no key at the home, or none of the admin keys the controller names: nobody could approve); 429 `DEVICE_REQUEST_LIMIT_REACHED` (3 open per account, 10 started an hour) |
+| `GET /v1/homes/{home_id}/device-requests` | the account's open requests for the home: `{"items": [...]}`; expired ones are deleted as they are read. 403 `NOT_A_MEMBER` |
+| `GET /v1/homes/{home_id}/device-requests/{id}` | the request; 404 `NOT_FOUND` once collected, declined, withdrawn or expired |
+| `POST …/device-requests/{id}/answer` | `{ approver_key }` (X25519, base64): a device of the account takes the request; the same key again is fine. 403 `NO_KEY_AT_HOME` (the account uses no key at the home), 409 `ALREADY_ANSWERED` (another key did) |
+| `POST …/device-requests/{id}/key` | `{ device_key }`: the new device shows its key once a device answered (409 `NOT_ANSWERED`); it must match the commitment (400 `COMMITMENT_MISMATCH`) |
+| `POST …/device-requests/{id}/approve` | `{ sealed }` (base64, at most 512 characters): the invitation sealed to the new device, kept as it came. 403 `NO_KEY_AT_HOME`, 409 `NOT_READY` (no device key yet), 409 `ALREADY_APPROVED` |
+| `POST …/device-requests/{id}/collect` | `{"sealed", "approver_key"}`, once: the request goes. 409 `NOT_APPROVED` |
+| `DELETE …/device-requests/{id}` | 204: declined by a device of the account, or withdrawn by the new one |
+
+Requests also go with the membership (leaving, being removed, another account claiming the home, the account deleted), when the account signs out everywhere, and at the daily cron once expired; `device_request_starts` (an account's starts in the current hour) is cleared there too. Logs: `device_request_created`, `device_request_answered`, `device_request_approved`, `device_request_collected`, `device_request_deleted`, `device_request_refused` (`why`: `no_approver`, `open_limit`, `hourly_limit`), `device_request_roles_unknown`, `device_requests_purged`; never a label, a key or a sealed value. `.dev.vars` may set `DEVICE_REQUEST_SECONDS` (default 600; the tests use 2). Tests: `device-requests.test.mjs`.
 
 They all need the session (401 `NOT_SIGNED_IN`). A daily cron (`triggers` in `wrangler.jsonc`, `src/invitations.js`, `src/index.js`) removes invitations a day after their expiry, with their requests to join, and expired sessions and unfinished sign-ins; and accounts nobody can sign in to (Apple's consent-revoked took their only sign-in) that nobody signed in to for 90 days, as after Apple's account-deleted (ADR-041: deleted without a home, emptied of the person with one).
 

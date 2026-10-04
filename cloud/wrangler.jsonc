@@ -38,10 +38,13 @@
     "APPLE_KEY_ID": "Q3WXX95K83",
     "APPLE_APP_ID": "io.directorlink.app",
     "APP_ORIGINS": "https://app.directorlink.io",
+    "SITE_ORIGINS": "https://directorlink.io,https://www.directorlink.io",
     "PUBLIC_URL": "https://api.directorlink.io"
   },
+  // Daily housekeeping, and DirectorLink in numbers every hour (ADR-052): index.js tells them
+  // apart by the expression, so "47 * * * *" must stay as written in src/stats.js (STATS_CRON).
   "triggers": {
-    "crons": ["17 3 * * *"]
+    "crons": ["17 3 * * *", "47 * * * *"]
   },
   "routes": [
     { "pattern": "api.directorlink.io", "custom_domain": true }

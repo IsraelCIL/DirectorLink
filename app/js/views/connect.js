@@ -1,6 +1,7 @@
 // First-time setup on Home: the controller address and the pairing code from Composer
 // (DirectorLink → Actions → New Pairing Code). A code lasts 15 minutes and works once. Below it,
-// signing in with Google (account.js), which will reach the home from anywhere (docs/ACCOUNTS.md).
+// signing in with Google (account.js), which will reach the home from anywhere (docs/ACCOUNTS.md);
+// signed in, joining from another device of the account (ADR-053); and Paste invitation link.
 
 import { formatPairingCode, normalizeHost } from "../../api-client.js";
 import { IS_IOS } from "../platform.js";
@@ -9,6 +10,7 @@ import { t } from "../i18n.js";
 import { icon } from "../icons.js";
 import { pairWithCode } from "../session.js";
 import { signInButtons } from "./common.js";
+import { joinFromAnotherDevice, pasteInvitationPanel } from "./device-join.js";
 import { addressChanged, findController } from "./find.js";
 import { notify, state, ui } from "../state.js";
 
@@ -103,7 +105,9 @@ function accountOption({ divider = true } = {}) {
       "div",
       { class: "connect-account" },
       h("p", { class: "connect-signed-in", id: "connect-account-email" }, icon("user"), t("connect.signedInAs", { email: account.user.email })),
-      h("p", { class: "field-help" }, t("connect.signedInHelp"))
+      // On iPhone and iPad there is no pairing here: the iOS text above says what to do.
+      IS_IOS ? null : h("p", { class: "field-help" }, t("connect.signedInHelp")),
+      joinFromAnotherDevice()
     );
   }
   const outcome = account.notice && account.notice !== "deleted" && account.notice !== "deleteFailed" ? account.notice : null;
@@ -130,7 +134,8 @@ function iosCard() {
       h("h2", { id: "connect-title", class: "connect-title" }, t("connect.title")),
       h("p", { class: "notice notice-info", id: "connect-ios" }, t("connect.iosText")),
       h("p", { class: "connect-text" }, t("connect.iosHow")),
-      accountOption({ divider: false })
+      accountOption({ divider: false }),
+      pasteInvitationPanel({ key: "connect" })
     )
   );
 }
@@ -212,7 +217,8 @@ export function connectScreen() {
       h("h2", { id: "connect-title", class: "connect-title" }, t("connect.title")),
       h("p", { class: "connect-text" }, t("connect.intro")),
       form,
-      accountOption()
+      accountOption(),
+      pasteInvitationPanel({ key: "connect" })
     ),
     h("p", { class: "connect-footnote" }, t("connect.lanNote"))
   );

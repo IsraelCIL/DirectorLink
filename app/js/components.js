@@ -10,8 +10,10 @@ import {
   pressDoorbell,
   pressRelay,
   setBlind,
+  changesOnTheirWay,
   setFan,
   setLight,
+  setRefrigerator,
   setThermostat,
   stopBlind,
 } from "./controls.js";
@@ -22,6 +24,7 @@ import { isFavorite, toggleFavorite } from "./favorites.js";
 import { formatRelative, formatTemperature, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { blindStateLabel, climateIsOn, fanLabel, fanSpeedLabel, fanStateLabel, labelOr, modeLabel, roomName, shownBrightness } from "./model.js";
+import { FEATURE_ICONS, fridgeFeatures, zones } from "./refrigerators.js";
 import { isDual, shownSetpoints } from "./setpoints.js";
 import { canSetPosition, canStop, shadeView } from "./shades.js";
 import { can, deviceKey, notify, state, ui } from "./state.js";
@@ -409,6 +412,102 @@ export function fanRow(fan, { showRoom = false } = {}) {
           )
         )
       : null,
+    inlineError(key)
+  );
+}
+
+// ---- refrigerators ---------------------------------------------------------------------------
+
+// Fridge and freezer: the temperature each reports, and what it is set to.
+function fridgeZones(fridge) {
+  const items = zones(fridge);
+  if (!items.length) return null;
+  return h(
+    "div",
+    { class: "fridge-zones" },
+    items.map((item) =>
+      h(
+        "div",
+        { class: `fridge-zone fridge-zone-${item.zone}` },
+        h("span", { class: "fridge-zone-name" }, t(`refrigerators.${item.zone}`)),
+        h("span", { class: "fridge-zone-temperature" }, item.temperature !== null ? formatTemperature(item.temperature) : "–"),
+        item.setpoint !== null ? h("span", { class: "fridge-zone-setpoint" }, t("refrigerators.setTo", { temperature: formatTemperature(item.setpoint) })) : null
+      )
+    )
+  );
+}
+
+// One feature: its name, a switch (members and above; the state for viewers), and while a change
+// is on its way to the refrigerator, that it is waiting for it.
+function fridgeFeatureRow(fridge, feature, coming, controls) {
+  const label = t(`refrigerators.features.${feature}`);
+  const on = fridge[feature] === true;
+  const waiting = feature in coming;
+  return h(
+    "li",
+    { class: `fridge-feature ${on ? "is-on" : ""}` },
+    h("span", { class: "fridge-feature-icon" }, icon(FEATURE_ICONS[feature])),
+    h(
+      "span",
+      { class: "fridge-feature-text" },
+      h("span", { class: "fridge-feature-name" }, label),
+      waiting
+        ? h("span", { class: "fridge-feature-state is-waiting", role: "status" }, t(coming[feature] ? "refrigerators.turningOn" : "refrigerators.turningOff"))
+        : !controls
+          ? h("span", { class: "fridge-feature-state" }, on ? t("refrigerators.on") : t("refrigerators.off"))
+          : null
+    ),
+    controls
+      ? h(
+          "button",
+          {
+            type: "button",
+            role: "switch",
+            class: "switch",
+            "aria-checked": String(on),
+            "aria-label": t("refrigerators.toggle", { feature: label, name: fridge.name }),
+            dataset: { key: `refrigerator:${fridge.id}:${feature}` },
+            onclick: () => setRefrigerator(fridge, { [feature]: !on }),
+          },
+          h("span", { class: "switch-thumb" })
+        )
+      : null
+  );
+}
+
+// A Samsung refrigerator (1.7.0): offline or the door open under its name, the fridge's and the
+// freezer's temperatures, the water filter, and its features. A feature changes once the
+// refrigerator confirms it through Samsung's cloud: the switch moves at once and says it waits.
+export function refrigeratorCard(fridge, { showRoom = false } = {}) {
+  const key = deviceKey("refrigerator", fridge.id);
+  const controls = can("member");
+  const coming = changesOnTheirWay("refrigerator", fridge.id);
+  const status = [
+    fridge.online ? null : t("refrigerators.offline"),
+    fridge.door_open === true ? t("refrigerators.doorOpen") : fridge.door_open === false ? t("refrigerators.doorClosed") : null,
+  ].filter(Boolean);
+  const features = fridgeFeatures(fridge);
+  return h(
+    "div",
+    { class: `device fridge ${fridge.door_open === true ? "is-door-open" : ""} ${fridge.online ? "" : "is-offline"}`.trim() },
+    h(
+      "div",
+      { class: "device-main" },
+      h("span", { class: "device-icon" }, icon("fridge")),
+      h(
+        "div",
+        { class: "device-text" },
+        name(fridge.name, "span", "device-name"),
+        h("span", { class: "device-meta" }, showRoom ? [name(roomName(fridge.room)), status.length ? " · " : null] : null, status.join(" · "))
+      ),
+      favoriteStar("refrigerator", fridge)
+    ),
+    fridge.online ? null : h("p", { class: "fridge-note" }, t("refrigerators.offlineHint")),
+    fridgeZones(fridge),
+    Number.isFinite(fridge.water_filter_usage)
+      ? h("p", { class: "fridge-filter" }, icon("drop"), t("refrigerators.waterFilter", { percent: Math.round(fridge.water_filter_usage) }))
+      : null,
+    features.length ? h("ul", { class: "fridge-features", "aria-label": t("refrigerators.featuresOf", { name: fridge.name }) }, features.map((feature) => fridgeFeatureRow(fridge, feature, coming, controls))) : null,
     inlineError(key)
   );
 }

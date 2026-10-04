@@ -106,8 +106,8 @@ jobs:
       - name: Validate console and website
         run: python scripts/check_sites.py
 
-      - name: Check JavaScript syntax (app, console and relay)
-        run: find app console cloud github-link -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Check JavaScript syntax (app, console, website and relay)
+        run: find app console site cloud github-link -name '*.js' -print0 | xargs -0 -n1 node --check
 
   app-and-cloud:
     name: App and cloud tests

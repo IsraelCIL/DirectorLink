@@ -42,8 +42,8 @@ export async function recordUsedKey(env, homeId, userId, keyId, announced) {
 }
 
 // The controller's list of the key ids that exist, as one transaction: members (never the owner)
-// who had keys and have none left in it leave the home, and the other keys are forgotten.
-// Returns the accounts that left.
+// who had keys and have none left in it leave the home, and the other keys are forgotten, with the
+// browsers registered for their alerts (ADR-050). Returns the accounts that left.
 export async function syncKeys(env, homeId, ids) {
   const list = JSON.stringify(ids);
   const [{ results: left }, { results: gone }] = await env.DB.batch([
@@ -54,6 +54,7 @@ export async function syncKeys(env, homeId, ids) {
         "RETURNING user_id"
     ).bind(homeId, list),
     env.DB.prepare("DELETE FROM member_keys WHERE home_id = ?1 AND key_id NOT IN (SELECT value FROM json_each(?2)) RETURNING key_id").bind(homeId, list),
+    env.DB.prepare("DELETE FROM push_subscriptions WHERE home_id = ?1 AND key_id IS NOT NULL AND key_id NOT IN (SELECT value FROM json_each(?2))").bind(homeId, list),
   ]);
   if (gone.length || left.length) {
     log("keys_revoked_at_home", { home: homeId, keys: [...new Set(gone.map((row) => row.key_id))], members_left: left.map((row) => row.user_id) });

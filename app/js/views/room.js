@@ -7,6 +7,7 @@ import {
   emptyState,
   fanRow,
   lightRow,
+  refrigeratorCard,
   relayRow,
   sectionTitle,
   skeletonCards,
@@ -77,6 +78,10 @@ export function roomView(roomId, { openCamera }) {
   if (group.blinds.length) {
     sections.push(section("blinds", "blinds", t("sections.blinds"), group.blinds.map((blind) => blindRow(blind))));
   }
+  // Samsung refrigerators, on drivers that have /v1/refrigerators (1.7.0).
+  if (group.refrigerators?.length) {
+    sections.push(section("refrigerators", "fridge", t("sections.refrigerators"), group.refrigerators.map((fridge) => refrigeratorCard(fridge))));
+  }
   // Doorbells (DoorBird), on drivers that have /v1/doorbells; their camera shows here, not twice.
   if (group.doorbells.length) {
     sections.push(section("doorbells", "bell", t("sections.doorbells"), group.doorbells.map((doorbell) => doorbellCard(doorbell, { openCamera }))));
@@ -117,7 +122,7 @@ export function roomView(roomId, { openCamera }) {
     pageHeader({ title: roomName(room), back: "#/", titleDir: "auto" }),
     actions.length ? h("div", { class: "toolbar" }, actions) : null,
     // View-only keys: the state is shown, the controls are not.
-    !can("member") && (group.lights.length || group.thermostats.length || group.fans.length || group.blinds.length)
+    !can("member") && (group.lights.length || group.thermostats.length || group.fans.length || group.blinds.length || group.refrigerators?.length)
       ? h("p", { class: "view-only-hint" }, icon("info"), h("span", {}, t("roles.viewOnlyHint")))
       : null,
     offlineBanner(),

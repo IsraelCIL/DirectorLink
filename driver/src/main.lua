@@ -6,6 +6,7 @@ local Normalize = require("src.control4.normalize")
 local ProjectEvents = require("src.control4.project_events")
 local AdapterManager = require("src.adapters.manager")
 local Alarm = require("src.adapters.alarm")
+local Refrigerator = require("src.adapters.refrigerator")
 local Keys = require("src.auth.keys")
 local RoomNames = require("src.core.room_names")
 local RoomLayout = require("src.core.room_layout")
@@ -15,6 +16,8 @@ local Scheduler = require("src.core.scheduler")
 local Weather = require("src.core.weather")
 local JewishCalendar = require("src.core.jewish_calendar")
 local SceneHandlers = require("src.api.handlers.scenes")
+local SceneLinks = require("src.core.scene_links")
+local SceneLinkHandlers = require("src.api.handlers.scene_links")
 local InstallerView = require("src.core.installer_view")
 local Store = require("src.core.store")
 local Clock = require("src.core.clock")
@@ -29,6 +32,7 @@ local SonosClient = require("src.sonos.client")
 local SonosRooms = require("src.sonos.rooms")
 local Activity = require("src.core.activity")
 local AutoBackup = require("src.cloud.auto_backup")
+local Alerts = require("src.cloud.alerts")
 
 local LIFECYCLE_KEYS = {
     reload_count = "directorlink_reload_count",
@@ -99,10 +103,14 @@ local function publishKeyCount()
     updateProperty("API Keys", Keys.count())
 end
 
--- A key was created, changed or revoked: profiles nobody uses go, then Composer's count and the
--- cloud's list of key ids.
+-- A key was created, changed or revoked: profiles nobody uses go, and the scene links a revoked
+-- key made (ADR-051), then Composer's count and the cloud's list of key ids.
 local function keysChanged()
     Profiles.prune(Keys.list())
+    if Keys.complete() then
+        Alerts.prune(Keys.list())
+    end
+    SceneLinkHandlers.prune()
     publishKeyCount()
     Relay.announceKeys()
 end
@@ -204,6 +212,8 @@ local function restored(restore)
     end
     shownScheduleStatus, shownCalendarStatus = nil, nil
     calendarChanged()
+    -- Scene links (ADR-051) whose scene did not come back, or that name another home, go.
+    SceneLinkHandlers.prune()
 end
 
 local services = {
@@ -334,12 +344,27 @@ local function publishInventory()
         counts.supported_relays,
         counts.supported_doorbells
     )
+    if counts.supported_refrigerators > 0 then
+        text = text .. string.format(", %d refrigerators", counts.supported_refrigerators)
+    end
     if Alarm.enabled() then
         text = text .. string.format(", %d alarm partitions", counts.alarm_partitions)
     end
     updateProperty("Inventory", text)
     return counts
 end
+
+-- A refrigerator's door has been open longer than its driver's Door Open Alert (ADR-049): once per
+-- opening, from the driver's Door Left Open event (src/adapters/refrigerator.lua). It goes into the
+-- history, and to the members and admins who chose the alert, sealed to each one's key (ADR-050),
+-- saying for how many minutes at least, when DirectorLink saw the door open (`seconds`).
+Refrigerator.onDoorLeftOpen(function(device, seconds)
+    Activity.record("door", "left_open", { what = device.name, room = device.room_name, ids = { device_id = device.id, room_id = device.room_id } })
+    local ok, err = pcall(Alerts.fridgeDoor, device, seconds)
+    if not ok then
+        Log.warn("alerts", "refrigerator alert failed", { device_id = device.id, error = tostring(err) })
+    end
+end)
 
 -- Reads the project from Director and (re)starts the adapters. `reason` is set for a refresh while
 -- the driver runs (src/control4/project_events.lua, or the action Refresh Project): the API keeps
@@ -461,6 +486,11 @@ function OnDriverLateInit(driverInitType)
     RoomLayout.load()
     local sceneCount, scenesStoredAs = Scenes.load()
     Log.info("scenes", "scenes loaded", { count = sceneCount, stored_as = scenesStoredAs })
+    -- Scene links (ADR-051): a scene changed to open doors meanwhile (by an older DirectorLink)
+    -- loses its link now.
+    local linkCount, linksStoredAs = SceneLinks.load()
+    Log.info("scenes", "scene links loaded", { count = linkCount, stored_as = linksStoredAs })
+    SceneLinkHandlers.prune()
     local scheduleCount, schedulesStoredAs = Schedules.load()
     Log.info("schedules", "schedules loaded", { count = scheduleCount, stored_as = schedulesStoredAs })
     Profiles.load()
@@ -532,11 +562,8 @@ function OnDriverLateInit(driverInitType)
         paused = schedulesPaused,
         calendar = JewishCalendar,
         onRun = automationRan,
-        -- A schedule that failed: the account service alerts the home's admins (ADR-047). Only
-        -- the time leaves the controller, never which schedule or scene.
-        onFailed = function(at)
-            Relay.tell({ type = "alert", kind = "schedule_failed", at = Clock.iso(at) })
-        end,
+        -- A schedule that failed: the home's admins are alerted, sealed to their keys (ADR-050).
+        onFailed = Alerts.scheduleFailed,
         onTick = function(now)
             refreshScheduleStatus(now)
             refreshCalendarStatus(now)
@@ -577,11 +604,41 @@ function OnDriverLateInit(driverInitType)
         remoteEnabled = services.remote.enabled,
         lockAvailable = Remote.available,
     })
+    -- Alerts the controller makes, sealed to each device's key (ADR-050): doorbells rang, doors
+    -- and gates opened (as the history has them), schedules that failed; the refrigerator's door
+    -- left open calls Alerts.fridgeDoor (above), and members are offered it in a home with one.
+    Alerts.start({
+        relay = Relay,
+        remote = Remote,
+        keys = Keys,
+        registry = Registry,
+        adapters = AdapterManager,
+        activity = Activity,
+        hasFridge = function()
+            return next(Registry.refrigeratorList()) ~= nil
+        end,
+    })
     if Properties and Properties["Remote Access"] == "On" then
         Relay.start()
     else
         updateProperty("Remote Status", "Off")
     end
+end
+
+-- Every scene link goes (ADR-051): Composer's Remove All Scene Links (`always`: in the history even
+-- when there were none), Revoke All API Keys and Reset Remote Identity (`reason`). Links that could
+-- not be removed for good (the store was not written) stay, and the history, the log and Remote
+-- Status say so. Returns how many there were and whether they went.
+local function removeSceneLinks(reason, always)
+    local count, saved = SceneLinks.removeAll()
+    if not saved then
+        Log.error("scenes", "scene links not removed: they could not be saved", { count = count, reason = reason })
+        updateProperty("Remote Status", "Scene links not removed: could not save")
+        Activity.record("access", "links_removed", { who = Activity.COMPOSER, count = count, reason = reason, outcome = "failed" })
+    elseif count > 0 or always then
+        Activity.record("access", "links_removed", { who = Activity.COMPOSER, count = count, reason = reason })
+    end
+    return count, saved
 end
 
 function ExecuteCommand(command, params)
@@ -598,7 +655,9 @@ function ExecuteCommand(command, params)
         if ok then
             local invitations = Invitations.revokeAll()
             Remote.clearClaim()
-            Log.warn("relay", "remote identity reset from Composer", { invitations = invitations })
+            -- Scene links name the old home in their addresses: none of them can work any more.
+            local links = removeSceneLinks("new_identity")
+            Log.warn("relay", "remote identity reset from Composer", { invitations = invitations, scene_links = links })
         else
             updateProperty("Remote Status", "Identity not reset: " .. tostring(code))
         end
@@ -615,12 +674,20 @@ function ExecuteCommand(command, params)
         Log.info("schedules", "schedules and scenes printed for Composer")
     elseif params.ACTION == "REVOKE_API_KEYS" then
         local count = Keys.revokeAll()
-        -- Nobody may join afterwards with an invitation or claim the home with an older token.
+        -- Nobody may join afterwards with an invitation or claim the home with an older token, nor
+        -- run a scene with a link someone made before (ADR-051).
         local invitations = Invitations.revokeAll()
         Remote.clearClaim()
-        keysChanged()
-        Log.warn("auth", "all API keys revoked from Composer", { count = count, invitations = invitations })
         Activity.record("access", "all_revoked", { who = Activity.COMPOSER, count = count })
+        local links = removeSceneLinks("keys_revoked")
+        keysChanged()
+        Log.warn("auth", "all API keys revoked from Composer", { count = count, invitations = invitations, scene_links = links })
+    elseif params.ACTION == "REMOVE_SCENE_LINKS" then
+        -- Every scene's link stops working at once (ADR-051); admins can make new ones.
+        local count, saved = removeSceneLinks(nil, true)
+        if saved then
+            Log.warn("scenes", "all scene links removed from Composer", { count = count })
+        end
     end
 end
 

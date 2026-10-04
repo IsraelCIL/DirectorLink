@@ -2,8 +2,9 @@
 check_app.py): the relay's CA file holds exactly the pinned roots however its blocks are written,
 nothing else in driver/certs reaches the package, line endings do not change it, check_repo vets
 what is staged, the door switches, the Jewish calendar, the alarm's status and Sonos in driver.xml
-ship off, the alarm stays read-only, one file talks to the Sonos players, and the app names every
-month, holiday and weekly reading the calendar API can send.
+ship off, the alarm stays read-only, one file talks to the Sonos players, the app names every
+month, holiday and weekly reading the calendar API can send, and the website's one script asks
+only for DirectorLink in numbers (check_sites.py).
 
     python -m unittest discover -s tests/scripts
 """
@@ -26,6 +27,7 @@ import build  # noqa: E402
 import check_app  # noqa: E402
 import check_package  # noqa: E402
 import check_repo  # noqa: E402
+import check_sites  # noqa: E402
 
 CA_FILE = "certs/directorlink-roots.pem"
 PEM = (ROOT / "driver" / CA_FILE).read_bytes().replace(b"\r\n", b"\n")
@@ -282,8 +284,8 @@ class AlarmReadOnly(unittest.TestCase):
     def test_no_scene_step_reaches_the_alarm(self):
         files = driver_sources()
         for name, old, new in (
-            ("src/core/scenes.lua", "music = true }", "music = true, alarm = true }"),
-            ("src/api/handlers/scenes.lua", 'relays = "relay" }', 'relays = "relay", partitions = "alarm" }'),
+            ("src/core/scenes.lua", "refrigerators = true }", "refrigerators = true, alarm = true }"),
+            ("src/api/handlers/scenes.lua", 'refrigerators = "refrigerator" }', 'refrigerators = "refrigerator", partitions = "alarm" }'),
         ):
             with self.subTest(name=name):
                 self.assertIn(old, files[name])
@@ -358,6 +360,58 @@ class StagedRoots(unittest.TestCase):
         self.stage(PEM, PEM + KEY.encode("ascii"))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertIsNone(refusal(check_repo.main))
+
+
+class SiteNumbers(unittest.TestCase):
+    """check_sites.py: the website's one script asks only for DirectorLink in numbers, from 25
+    homes, and the section starts hidden (1.7.0, ADR-052)."""
+
+    SITE = ROOT / "site"
+
+    def files(self):
+        pages = {path.name: path.read_text(encoding="utf-8") for path in self.SITE.glob("*.html")}
+        return pages, (self.SITE / "numbers.js").read_text(encoding="utf-8"), (self.SITE / "_headers").read_text(encoding="utf-8")
+
+    def refused(self, pages, script, headers):
+        return refusal(check_sites.check_site_numbers, pages, script, headers)
+
+    def test_the_site_passes(self):
+        self.assertIsNone(self.refused(*self.files()))
+
+    def test_the_section_must_start_hidden(self):
+        pages, script, headers = self.files()
+        shown = pages["index.html"].replace('aria-labelledby="numbers-title" hidden>', 'aria-labelledby="numbers-title">')
+        self.assertNotEqual(shown, pages["index.html"])
+        self.assertIn("must start hidden", self.refused({**pages, "index.html": shown}, script, headers) or "")
+
+    def test_the_csp_allows_only_the_script_and_the_totals(self):
+        pages, script, headers = self.files()
+        for old, new in (
+            ("connect-src https://api.directorlink.io;", "connect-src https://api.directorlink.io https://example.com;"),
+            ("connect-src https://api.directorlink.io;", "connect-src *;"),
+            ("script-src 'self';", "script-src 'self' 'unsafe-inline';"),
+        ):
+            with self.subTest(new=new):
+                changed = headers.replace(old, new)
+                self.assertNotEqual(changed, headers)
+                self.assertIn("site/_headers CSP", self.refused(pages, script, changed) or "")
+
+    def test_the_script_asks_for_the_totals_only_and_from_25_homes(self):
+        pages, script, headers = self.files()
+        for changed, expected in (
+            (script.replace("export const MIN_HOMES = 25;", "export const MIN_HOMES = 1;"), "only from 25 homes"),
+            (script + '\nfetch("https://example.com/beacon");\n', "may ask only"),
+            (script.replace('credentials: "omit"', 'credentials: "include"'), "without cookies"),
+            (script + "\nlocalStorage.setItem('seen', '1');\n", "must not use localStorage"),
+            (script + "\nsection.innerHTML = answer;\n", "must not use innerHTML"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, self.refused(pages, changed, headers) or "")
+
+    def test_no_other_page_loads_a_script(self):
+        pages, script, headers = self.files()
+        privacy = pages["privacy.html"].replace("</head>", '<script type="module" src="/numbers.js"></script></head>')
+        self.assertIn("site/privacy.html may load only", self.refused({**pages, "privacy.html": privacy}, script, headers) or "")
 
 
 if __name__ == "__main__":

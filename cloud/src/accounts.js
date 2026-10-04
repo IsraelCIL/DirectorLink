@@ -450,7 +450,16 @@ async function me(request, env, headers) {
     }
     const { results } = await env.DB.prepare("SELECT provider FROM identities WHERE user_id = ? ORDER BY created_at").bind(user.id).all();
     return json(
-      { id: user.id, email: user.email, name: user.name, created_at: user.created_at, providers: results.map((row) => row.provider), sign_in_providers: configuredProviders(env) },
+      {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        created_at: user.created_at,
+        providers: results.map((row) => row.provider),
+        sign_in_providers: configuredProviders(env),
+        // 1.7.0: a new device can join by approval (ADR-053); the app hides it from older servers.
+        device_requests: true,
+      },
       200,
       headers
     );
@@ -523,6 +532,8 @@ async function logout(request, env, headers) {
     const [, { results: alerts }] = await env.DB.batch([
       env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(session.user_id),
       env.DB.prepare("DELETE FROM push_subscriptions WHERE user_id = ? RETURNING home_id").bind(session.user_id),
+      // And its new devices' requests to join (ADR-053): one may come from the lost one.
+      env.DB.prepare("DELETE FROM device_requests WHERE user_id = ?").bind(session.user_id),
     ]);
     await homesChanged(env, alerts.map((row) => row.home_id));
     log("signed_out_everywhere", { user: session.user_id });

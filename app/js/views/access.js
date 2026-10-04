@@ -9,6 +9,7 @@ import { h } from "../dom.js";
 import { formatDateTime, formatRelative, formatUntil, t } from "../i18n.js";
 import { icon } from "../icons.js";
 import { decideJoinRequest, joinCodeText, listJoinRequests, listMembers, removeMember, savedRemote } from "../remote.js";
+import { linksMadeBy, linksSupported } from "../scene-links.js";
 import { api, errorText, roleLabel } from "../session.js";
 import { can, notify, state, ui } from "../state.js";
 import { notReadyState, offlineBanner, pageHeader } from "./common.js";
@@ -26,7 +27,7 @@ function failure(error) {
 async function fetchAccess() {
   const home = savedRemote()?.home || state.remoteInfo?.home_id || null;
   const accountStatus = state.account.status;
-  const [devices, invitations, people, profiles, requests] = await Promise.all([
+  const [devices, invitations, people, profiles, requests, links] = await Promise.all([
     api("/v1/api-keys").then((answer) => answer?.items || [], failure),
     // Drivers before 0.10.0 have no invitations.
     api("/v1/invitations").then((answer) => answer?.items || [], (error) => (error?.status === 404 || error?.status === 405 ? [] : failure(error))),
@@ -46,8 +47,10 @@ async function fetchAccess() {
           (error) => (["OWNER_ONLY", "NOT_A_MEMBER", "NOT_FOUND"].includes(error?.code) ? null : failure(error))
         )
       : Promise.resolve(null),
+    // Scene links (1.7.0) go with the key that made them: revoking one says how many stop.
+    linksSupported() ? api("/v1/scene-links").then((answer) => answer?.items || [], () => null) : Promise.resolve(null),
   ]);
-  ui.access = { ...(ui.access || {}), at: Date.now(), home, accountStatus, devices, invitations, people, profiles, requests };
+  ui.access = { ...(ui.access || {}), at: Date.now(), home, accountStatus, devices, invitations, people, profiles, requests, links };
   notify();
 }
 
@@ -99,10 +102,17 @@ async function act(work, done) {
   await loadAccess();
 }
 
-// Revoking a key: it stops working at home and away at once; an account whose last key it was
-// leaves the home (the controller tells the account service).
+// " The 2 scene links made on it stop working too." after a question, when keys that made scene
+// links are revoked (ADR-051); "" otherwise.
+function linksNote(key, keyIds) {
+  const count = keyIds.reduce((sum, id) => sum + linksMadeBy(ui.access.links, id), 0);
+  return count ? ` ${t(key, { count })}` : "";
+}
+
+// Revoking a key: it stops working at home and away at once, and the scene links made with it; an
+// account whose last key it was leaves the home (the controller tells the account service).
 function revokeDevice(device) {
-  if (ui.access.busy || !window.confirm(t("access.revokeConfirm", { name: device.name }))) return;
+  if (ui.access.busy || !window.confirm(t("access.revokeConfirm", { name: device.name }) + linksNote("access.revokeLinks", [device.id]))) return;
   act(() => api(`/v1/api-keys/${device.id}`, { method: "DELETE" }), t("access.revoked", { name: device.name }));
 }
 
@@ -150,7 +160,7 @@ function removePerson(person, devices) {
   }
   const current = devices.find((device) => device.current)?.id;
   const keys = person.key_ids.filter((id) => id !== current && devices.some((device) => device.id === id));
-  const question = keys.length ? t("access.removeConfirm", { name, count: keys.length }) : t("access.removeConfirmUnknown", { name });
+  const question = (keys.length ? t("access.removeConfirm", { name, count: keys.length }) : t("access.removeConfirmUnknown", { name })) + linksNote("access.removeLinks", keys);
   if (ui.access.busy || !window.confirm(question)) return;
   act(async () => {
     for (const id of keys) {

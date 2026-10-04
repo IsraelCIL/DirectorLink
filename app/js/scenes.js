@@ -2,25 +2,26 @@
 // members run them, admins make and change them (views/scenes.js). A step sets devices of one
 // type: the ones it names, or all of them in a room or the whole home. Doors and gates only get
 // a pulse, what their Open button does. A music step (1.5.0) pauses or stops the Sonos music in a
-// room or the whole home.
+// room or the whole home. A refrigerators step (1.7.0) switches refrigerator features on or off.
 
 import { sceneSet } from "./fans.js";
 import { formatTemperature, formatTemperatureRange, t } from "./i18n.js";
 import { deviceRoomId, fanLabel, fanSpeedLabel, modeLabel, musicDevices, roomById, roomName, shownBrightness } from "./model.js";
 import { api, errorText, noteForbidden, refreshDevices } from "./session.js";
 import { isDual } from "./setpoints.js";
+import { FEATURES as FRIDGE_FEATURES } from "./refrigerators.js";
 import { scenePosition } from "./shades.js";
 import { can, notify, state, ui } from "./state.js";
 
 export const SCENE_ICONS = ["bulb", "moon", "sun", "leave", "movie", "climate", "blinds", "home"];
-export const STEP_TYPES = ["lights", "climate", "fans", "blinds", "relays", "music"];
-export const STEP_ICONS = { lights: "bulb", climate: "climate", fans: "fan", blinds: "blinds", relays: "door", music: "music" };
+export const STEP_TYPES = ["lights", "climate", "fans", "blinds", "relays", "music", "refrigerators"];
+export const STEP_ICONS = { lights: "bulb", climate: "climate", fans: "fan", blinds: "blinds", relays: "door", music: "music", refrigerators: "fridge" };
 export const MAX_STEPS = 40;
 export const MAX_DEVICE_IDS = 100;
 // The temperatures a scene step takes (driver/src/core/scenes.lua), in °C.
 export const SCENE_MIN_TEMPERATURE = 5;
 export const SCENE_MAX_TEMPERATURE = 40;
-const LISTS = { lights: "lights", climate: "thermostats", fans: "fans", blinds: "blinds", relays: "relays" };
+const LISTS = { lights: "lights", climate: "thermostats", fans: "fans", blinds: "blinds", relays: "relays", refrigerators: "refrigerators" };
 const RESULT_MS = 4000;
 const CONFIRM_MS = 5000;
 
@@ -135,6 +136,11 @@ export function stepAction(step) {
     return t("scenes.do.position", { percent: set.position });
   }
   if (step.type === "music") return set.action === "stop" ? t("scenes.do.stopMusic") : t("scenes.do.pauseMusic");
+  if (step.type === "refrigerators") {
+    return FRIDGE_FEATURES.filter((feature) => typeof set[feature] === "boolean")
+      .map((feature) => t(set[feature] ? "scenes.do.featureOn" : "scenes.do.featureOff", { feature: t(`refrigerators.features.${feature}`) }))
+      .join(", ");
+  }
   return t("scenes.do.pulse");
 }
 

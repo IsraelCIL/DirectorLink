@@ -14,6 +14,7 @@ local TYPE_BY_KIND = {
     camera = "camera",
     relay = "relay",
     doorbell = "doorbell",
+    refrigerator = "refrigerator",
 }
 
 local RESOURCE_PATH = {
@@ -24,6 +25,7 @@ local RESOURCE_PATH = {
     camera = "/v1/cameras/",
     relay = "/v1/relays/",
     doorbell = "/v1/doorbells/",
+    refrigerator = "/v1/refrigerators/",
 }
 
 local SETTABLE_MODES = {
@@ -203,6 +205,43 @@ function Views.doorbell(registry, device)
         last_opened_at = last.opened or Json.null,
         last_access_at = last.access or Json.null,
         events = events,
+    }
+end
+
+-- Samsung refrigerators (1.7.0, ADR-049). Temperatures and setpoints in °C, null when the
+-- refrigerator does not report them; a feature it does not have is null and not in `features`, the
+-- ones PATCH takes. `features_reported` is false when its driver does not say which it has: then all
+-- four are listed.
+function Views.refrigerator(registry, device)
+    local capabilities = device.capabilities or {}
+    local state = device.state or {}
+    local features = Json.array()
+    for _, feature in ipairs(capabilities.features or {}) do
+        features[#features + 1] = feature
+    end
+    local function feature(key)
+        if state[key] == nil then
+            return Json.null
+        end
+        return state[key]
+    end
+    return {
+        id = device.id,
+        name = device.name,
+        room = Views.roomRef(registry, device.room_id, device.room_name),
+        online = state.online == true,
+        fridge_temperature = nullable(state.fridge_temperature),
+        fridge_setpoint = nullable(state.fridge_setpoint),
+        freezer_temperature = nullable(state.freezer_temperature),
+        freezer_setpoint = nullable(state.freezer_setpoint),
+        door_open = state.door_open == nil and Json.null or state.door_open,
+        water_filter_usage = nullable(state.water_filter_usage),
+        power_cool = feature("power_cool"),
+        power_freeze = feature("power_freeze"),
+        sabbath_mode = feature("sabbath_mode"),
+        ice_maker = feature("ice_maker"),
+        features = features,
+        features_reported = capabilities.features_reported == true,
     }
 end
 

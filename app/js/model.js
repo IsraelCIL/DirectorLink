@@ -2,6 +2,7 @@
 
 import { SPEED_NAMES } from "./fans.js";
 import { currentLanguage, formatTemperature, formatTemperatureRange, t } from "./i18n.js";
+import { zones } from "./refrigerators.js";
 import { isDual } from "./setpoints.js";
 import { movingText, shadeView } from "./shades.js";
 import { state } from "./state.js";
@@ -51,6 +52,21 @@ export function fanStateLabel(fan) {
   return Number.isInteger(fan.speed) ? t("fans.onAt", { speed: fanSpeedLabel(fan.speed) }) : t("fans.on");
 }
 
+// "3° · −18°": a refrigerator's fridge and freezer temperatures, the ones it reports.
+export function fridgeTemperatures(fridge) {
+  return zones(fridge)
+    .filter((zone) => zone.temperature !== null)
+    .map((zone) => formatTemperature(zone.temperature))
+    .join(" · ");
+}
+
+// A refrigerator in a line: offline, its door open, or its temperatures (and the door closed).
+export function fridgeStateLabel(fridge) {
+  if (!fridge.online) return t("refrigerators.offline");
+  if (fridge.door_open === true) return t("refrigerators.doorOpen");
+  return fridgeTemperatures(fridge) || (fridge.door_open === false ? t("refrigerators.doorClosed") : "");
+}
+
 export function blindIsOpen(blind) {
   return Number.isFinite(blind.position) && blind.position > 0;
 }
@@ -72,6 +88,7 @@ export function devicesInRoom(roomId) {
     cameras: pick(state.cameras),
     relays: pick(state.relays),
     doorbells: pick(state.doorbells),
+    refrigerators: pick(state.refrigerators || []),
     music: pick(musicDevices()),
     // Devices this app cannot control.
     others: state.devices.filter((device) => !device.supported && deviceRoomId(device) === id),
@@ -87,6 +104,7 @@ function controllableCount(group) {
     group.cameras.length +
     group.relays.length +
     group.doorbells.length +
+    (group.refrigerators?.length || 0) +
     (group.music?.length || 0)
   );
 }
@@ -114,6 +132,7 @@ export function visibleRooms() {
     cameras: state.cameras.filter(orphan),
     relays: state.relays.filter(orphan),
     doorbells: state.doorbells.filter(orphan),
+    refrigerators: (state.refrigerators || []).filter(orphan),
     // A Sonos room whose name matches no room, until an admin picks one.
     music: musicDevices().filter(orphan),
     others: [],

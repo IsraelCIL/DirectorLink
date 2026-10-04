@@ -1,0 +1,34 @@
+{
+  "about": "Test vectors for sealed alert details (ADR-050), computed with Node's crypto. A device's alert key is HMAC-SHA256(its lock key, \"DirectorLink alert v1\"); its enc and mac keys are HMAC-SHA256(alert key, \"enc\" / \"mac\"); a detail is its JSON (keys in the driver's order: id, name, type first, then the others alphabetically) padded with spaces to 496 bytes, then AES-256-CBC with enc (512 bytes, 684 in base64, whatever the detail), then an HMAC-SHA256 with mac over \"alert v1|\" + home + \"|\" + key + \"|\" + iv + \"|\" + ct (base64). The driver (Lua) pads and seals them, the app derives the alert key and its service worker opens them.",
+  "device": {
+    "api_key": "ak_0123456789abcdef0123456789abcdef0123456789abcdef",
+    "lock_key_hex": "97293ed4b9cfe6157e256417c3ee23af62127b00759ac19a7f89030aa5c9946e",
+    "alert_key_hex": "3584da6f82af3d5de712280a4d396f1761bbf45e1642121f1340f42a9a3cec92",
+    "enc_key_hex": "8a786a70a7ee815af64d2241fa58ef022df02286c39d5fd62f6648ca323d23cc",
+    "mac_key_hex": "38d9f6ae455e664e89b20ca353eb6e6d6a344c05263adc091263a8461682301d"
+  },
+  "home": "00112233445566778899aabbccddeeff",
+  "key": "4fde46cc",
+  "details": [
+    {
+      "name": "doorbell",
+      "plaintext": "{\"id\":93,\"name\":\"שער הכניסה\",\"at\":\"2026-10-03T05:00:00Z\",\"kind\":\"doorbell\",\"room\":\"Entrance\",\"room_id\":10,\"v\":1}                                                                                                                                                                                                                                                                                                                                                                                       ",
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "sealed": {
+        "iv": "AAECAwQFBgcICQoLDA0ODw==",
+        "ct": "oqRpVLCH5yp+fKVBGTpW8jWa1Id/EdRR15alCkeZ/NXTU2ofKsidzP9m70FRl0oCfbL/xmtiKaPqLfZ0+wx1+TyXiyyqcFt17jG7ywedp+6GAmpdFrmmqZ1CdSy+y4UsoZtHDru1yyguO5vCYXzhA6Mig0sjqz40xHWkmbFLVjKTq19xDQay/g/ODHufHDe/FGMnS4w7064I+P1PKhi+Bps5tRbeHtzdacQYBwCL2Ppe81o1h2vohhKus9db3gQigT2QAx9De705+88K9+oNKxLWTGP8yC5iCh9d1S8TvMlvlrlsdBexpZiuNq7vj0s192/wsnJ76K97YwC3I4Jr5fB6FeWytvpjoVsYE1khnJ0DyvWYM+fICH002LyyBDH9+NSixc/yjuiDTl2ysfX+6STBeQQRXpSOPCAxGfrxEgVdZq37Z6aOt3o1w+dYwfmCUvN1kozDpf/ZSWh6yPhpRdcP27LAME8MPwGyDbGCiX8zLlPPuElC9K9hrycE0VI5kPVYu0P669FWWOxyhWrjAnWKUZMsHuitX9GTMHGS0AP43VOb/WkjZdJyidW2mdF9DkJwNYsTSb1cJpLJv44jkerCEmGM1+D1M+TJrJvKRXLWCqEyD8l6M1yUuwAle+Bn8MfW59Shuv0VNgh0iR7vNVJ3/nyK+6ODr+U6V8CZ5SM=",
+        "mac": "onp0IgyAnS/n53mZgxA3a482qq74arV2Lrbm6XscjbI="
+      }
+    },
+    {
+      "name": "door_opened",
+      "plaintext": "{\"id\":70,\"name\":\"Main Door\",\"action\":\"pulse\",\"at\":\"2026-10-03T05:01:00Z\",\"kind\":\"door_opened\",\"room\":\"Kitchen\",\"room_id\":10,\"v\":1,\"via\":\"Good night\",\"who\":{\"name\":\"Dana's iPhone\",\"type\":\"key\",\"profile\":\"Dana\"}}                                                                                                                                                                                                                                                                                              ",
+      "iv_hex": "f0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "sealed": {
+        "iv": "8OHSw7Sllod4aVpLPC0eDw==",
+        "ct": "CvcwAagDbsjlle+sIYfBtnQrmkjrR1MTBk3GOTkcG5JYmopZN9mfQa66mWKCDkgC5miGeGHPe36/bdAGO6y37vaTUyEYZJkTpllnMEfaWzBUfivSKonEfOaWGr2PQ4NQ9+NrJ2zOUheHiOK6nBH0AzM3J5UB1Cf1FyeYEVxJ6alPwy/VcG2V4U/DgEl7sRssu8otlfye5E20KD4ezDonam6Q93fbLoG+bZrYdMDMyknpxXwniLGhryHGBFJzXA8esVy9IyWNUkSEElAwYYCWY1DqoOjsrzaJl0hBQiMaOlBzqNORdRiUg08ivmpJ31zGZW/RhPlUO23YdF8U3tRH4ncwsXWoSTLk25OF+OFDaLMOL0jIXOr9wykmkXGNSm01PssIn+fpz2jDgtU5k007lsWWTW/qrqtV2pTvEMxfhe4Jx3eKz6cdQWreN7X2RbUngO5NkwyYDAdFS66ux19lSwTs1xC+r9Hx8TIzJ2Bfctj5agOb6qz5+WM1uIR+s1P+tKfZvry2HexD7cPfwEqn6/6jM56Ar0P2ElRm6NVXvwaZI9E1lanzAFq4giJxL+l2RGaRdG2swR90b2bI17rX0GCYrTKiM2h6WW/8cAJc44tL313DLobNWsSGOEI+oahCd3Hihqk2xGEkv3u95H/gW5NpzVLLHydAT+RryTqfB+E=",
+        "mac": "6HLH0Z//VX43npAJw3RTC0fl4RcrgzuMPyQaW5QflAg="
+      }
+    }
+  ]
+}

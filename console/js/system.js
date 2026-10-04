@@ -67,6 +67,7 @@ function sections() {
         ["Blinds", show(inventory.blinds)],
         ["Cameras", show(inventory.cameras)],
         ["Relays", show(inventory.relays)],
+        ["Refrigerators", show(inventory.refrigerators)],
       ],
     },
     {

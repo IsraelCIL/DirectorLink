@@ -1,5 +1,6 @@
-/* directorlink.io: a few static pages, no scripts, no external requests. The app's graphite palette; Sora
-   and IBM Plex are used when installed, otherwise the system fonts. */
+/* directorlink.io: a few static pages, and on the home page one small script that asks
+   api.directorlink.io for DirectorLink in numbers. The app's graphite palette; Sora and IBM Plex are
+   used when installed, otherwise the system fonts. */
 
 :root {
   --bg: #f5f5f4; --card: #ffffff; --ink: #18181b; --muted: #52525b; --line: #e4e4e7;
@@ -397,6 +398,60 @@ main {
   box-shadow: none;
 }
 
+/* DirectorLink in numbers: hidden until numbers.js has totals to show (ADR-052). */
+.numbers {
+  margin-block-start: 40px;
+  padding: 28px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+.numbers[hidden] {
+  display: none;
+}
+
+.numbers h2 {
+  margin-block-end: 20px;
+  font-size: 26px;
+}
+
+.number-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.number-list div {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+}
+
+.number-list dd {
+  margin: 0;
+  color: var(--accent);
+  font-family: var(--font-head);
+  font-size: clamp(32px, 5vw, 48px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.number-list dt {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.numbers-note {
+  margin-block-start: 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 /* Text pages (privacy). */
 .document {
   max-width: 72ch;
@@ -712,6 +767,12 @@ main {
   .header,
   main {
     padding-inline: 16px;
+  }
+  .numbers {
+    padding: 22px;
+  }
+  .number-list {
+    grid-template-columns: minmax(0, 1fr);
   }
   .actions .button {
     width: 100%;

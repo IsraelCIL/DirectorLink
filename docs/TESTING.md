@@ -2,7 +2,69 @@
 
 ## Current release
 
-`v1.6.0` — History (0zn), alerts (0zo), automatic backups to the account and the Sonos rooms in backups (0zp), changing a scene action (0zl), and the remote connection checked every 10 s (0zm). Deploy the cloud (two migrations, the VAPID secret) before updating the driver.
+`v1.7.0` — Join from another device and Paste invitation link (0zu), scene links (0zt), alerts sealed to each device: doorbells, doors, the refrigerator and choices (0zs), Samsung refrigerators (0zr), DirectorLink in numbers and the drivers pages (0zq). Apply migrations 0008, 0009 and 0010 and deploy the Worker before updating the driver.
+
+## 0zu. Join from another device, and Paste invitation link (1.7.0)
+
+1. On a computer: an admin key, the home linked, signed in, DirectorLink open. On an iPhone: add DirectorLink to the Home Screen, open it and sign in with the same account. The Connect screen offers **Join from another device**; tap it: "Waiting for your other device…".
+2. Within a minute, or at once when the computer's window comes to the front, the computer shows the request with "Didn't ask? Decline it and sign out everywhere…". Tap **Show code**: the computer shows a field, the iPhone shows six digits.
+   - A wrong code: "That isn't the code…", nothing approved.
+   - The right code (with or without its space), then **Approve**: the iPhone joins by itself ("Connected · via account"), and People and devices lists its key under your person.
+3. Again, with three wrong codes: the request is declined on both devices. Again, and wait 10 minutes: it ran out. Sign out everywhere while one waits: it ends.
+4. A member-key device, or one still connecting or with the home offline, shows no request. An account with member keys only is told to ask an admin for an invitation.
+5. Android asks to join, then pairs at home or opens an Add my other device link: its request disappears from the computer.
+6. **Paste invitation link:** on the computer, Add my other device → Copy link; on the iPhone, Paste invitation link → iOS's Paste prompt → the join page → Accept. Refuse the paste: a field takes the whole link or only the part after `#/join/`. Other text on the clipboard is neither shown nor joined.
+7. In DevTools on the computer, `/device-requests` is asked about once a minute, and at once on focus.
+
+## 0zt. Scene links (1.7.0)
+
+1. With Remote Access On and the home linked, an admin opens a lights-only scene → **Link for automations** → **Make a link**, named "Test". The secret shows once, with QR and Copy buttons; History → Access: "Made a link for the scene …".
+2. iPhone Shortcuts: Get Contents of URL, the copied address, Method POST, Request Body JSON with the field `secret`. Running it runs the scene and returns `{"result":"ran"}`; History shows the run by Link "Test", and Composer's Last Automation "run from a scene link (Test)". An Arrive or NFC personal automation with Run Immediately runs it too.
+3. Android (HTTP Shortcuts posting the secret as text, or a form): it runs.
+4. Write the whole link to an NFC tag: tapping it opens the Run page, and nothing runs until Run. Paste the link into WhatsApp or Messages: the preview runs nothing.
+5. Change one character of the secret: 404. A 7th run within a minute: 429. Ten wrong secrets from one network: the 11th gets 429 (Retry-After up to 600); a correct run over mobile data still runs.
+6. Replace the link: the old one gets 404, the new one runs. Remove it: 404.
+7. Add a Doors & gates action to the linked scene: a warning, and Save asks first; after saving the link is gone and History says why. Make a link on a gate scene: refused.
+8. A second admin key B links another scene; revoke B in People and devices (the question says its link stops): B's link gets 404, the first still runs. Forget access key on the first device says the same before you cancel.
+9. Composer **Revoke All API Keys**: every link gets 404, and History (after pairing again) says all were removed. **Remove All Scene Links** does the same.
+10. Restore: make L1, back up, Replace (L2), restore that backup with another device paired: L1 gets 404, L2 runs.
+11. A scene whose only step is room-wide fans in a room without fans: "Nothing ran: the scene has no devices left to switch."
+12. Turn Remote Access Off: runs get 503, and Make a link explains why it can't.
+13. Workers Observability: `link_run` events, and searching for a secret finds nothing.
+14. Downgrade to 1.6.0: runs get 404 at once, scenes are unchanged; back on 1.7.0 the links run again.
+
+## 0zs. Alerts sealed to each device: doorbells, doors, the refrigerator, choices (1.7.0)
+
+1. Apply migration 0008 and deploy the Worker before updating the driver.
+2. On an admin device that had alerts on with 1.6.0, open the app once: the card lists Offline, Doorbell, Doors (off) and Schedules; the driver log says "alert choices changed".
+3. On a member's iPhone (the Home Screen app, signed in and linked), switch alerts on: Doorbell, and Refrigerator in a home with one.
+4. Close the app on both and press the DoorBird: both get "<doorbell> rang at HH:MM" within seconds; tapping opens Home with the banner. A second press within 30 s: no new notification. With the app open in front, the banner shows and the notification comes without sound.
+5. As an admin, turn on "A door or gate is opened"; open a gate from another device: "…opened by <person> (<device>) at HH:MM", tapping opens History. Open it from the Control4 app or a keypad: "…opened in Control4", and History says "In Control4" (this is the check that the DoorBird's and the KNX relays' events reach DirectorLink). Twice within a minute: one entry, one alert. A gate held open whose relay reports "closed" again: no Control4 entry.
+6. Leave the refrigerator door open past its Door Open Alert: members and admins who chose it get "…open for at least N min" (N about 5–7 at the defaults). An admin who chose doors only gets nothing for it.
+7. Make a schedule fail: admins get "the schedule for <scene> had a problem".
+8. Turn one kind off on one device: only that device stops getting it. Switch the app to Hebrew and ring again: the notification is in Hebrew.
+9. Cut the controller's internet for 10 minutes: the offline alert reaches only admin devices with Offline on.
+10. On a new device, with Remote Access off, switch alerts on: "Your home couldn't be reached…".
+11. Workers Observability: `notify_sent` shows counts only, never kinds or names.
+
+## 0zr. Refrigerators (1.7.0)
+
+1. Install the DirectorLink · Samsung Refrigerator driver, authorize it and select the refrigerator; update DirectorLink. Its Inventory property ends with ", 1 refrigerators", and with Log Level Debug and Refresh Project the log lists the refrigerator driver's variables.
+2. The kitchen's Refrigerators card shows the temperatures as the refrigerator driver's properties do; its feature tiles are not listed as other devices.
+3. Switch Sabbath Mode: "Turning on…", then on within about 10 s; Composer's property and the Control4 tile agree. Switch it back. When Samsung's cloud is slow, the wait lasts up to 65 s, and a later confirmation still flips the switch.
+4. A viewer's key: the card shows the state, without switches.
+5. Leave the door open at least 8 minutes: the card and Home show "Door open" within one poll, and History → Doors lists it once. Close and reopen: once more.
+6. Scene: Add an action → Refrigerators → Sabbath Mode → On; Try it now; run it from a schedule.
+7. Remove the refrigerator step from a scene and restart DirectorLink: it stays removed. On 1.6.0, save any scene, then return to 1.7.0: the step is back in the scenes that had it.
+8. Download a backup: the restore preview keeps the refrigerator step and favorite.
+
+## 0zq. DirectorLink in numbers, and the drivers pages (1.7.0)
+
+1. After migration 0010 and the Worker, `curl https://api.directorlink.io/v1/stats` answers 503 `STATS_NOT_COUNTED` until the next :47, then `{"homes","people","downloads","updated"}` and nothing else, matching D1 (claimed homes; accounts with a sign-in) and GitHub's total for DirectorLink.c4z.
+2. With `-H "Origin: https://directorlink.io"`: `Access-Control-Allow-Origin` for it and `Cache-Control: public, max-age=300`; another origin gets no ACAO; POST gets 405.
+3. Workers Observability shows `stats_counted` every hour; `stats_not_counted` only when GitHub or D1 failed, and the totals then stay.
+4. directorlink.io with fewer than 25 homes: no numbers section, no console or CSP errors.
+5. directorlink.io/drivers and /drivers/samsung-refrigerator load; Download gives the latest `DirectorLink-Samsung-Refrigerator.c4z`; Release notes, Report a problem and Source lead to the driver's GitHub pages.
 
 ## 0zp. Automatic backups to the account, and the Sonos rooms in backups (1.6.0)
 

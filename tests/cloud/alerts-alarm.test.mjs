@@ -2,7 +2,8 @@
 // Object storage, a fake D1 that can fail, a fake relay and the fake push service: an offline alert
 // that did not get through is tried again (and only for the browsers it missed), at most
 // ALERT_TRIES times; a connected home's object asks D1 again now and then and stops once nobody is
-// subscribed; a "changed" call stops it too.
+// subscribed; a "changed" call stops it too. And a registration with a key (ADR-050) waits for the
+// key work the object has queued.
 //   node --test tests/cloud/alerts-alarm.test.mjs
 
 import assert from "node:assert/strict";
@@ -235,4 +236,50 @@ test("told that subscriptions went, a watching object stops when none is left; o
   assert.equal(watching.DB.reads, 1);
   assert.equal(watching.storage.data.get("alerts_on"), false);
   assert.equal(watching.storage.alarm, null);
+});
+
+// Registering with a key (ADR-050): the account must use that key at the home (member_keys). The
+// object records it from a request just sealed with the key in the key work it queues after it
+// answered (home-relay.js, "e2e"), and the app registers again at once (KEY_NOT_LINKED): the
+// registration waits for that work before it looks.
+test("a registration with a key waits for the key work still queued before it looks the key up", async () => {
+  const linked = new Set();
+  const looked = [];
+  const DB = {
+    prepare(sql) {
+      const statement = {
+        sql,
+        args: [],
+        bind(...args) {
+          statement.args = args;
+          return statement;
+        },
+        async first() {
+          assert.match(sql, /FROM member_keys/);
+          looked.push(statement.args.join("|"));
+          return linked.has(statement.args.join("|")) ? { found: 1 } : null;
+        },
+      };
+      return statement;
+    },
+    async batch(statements) {
+      assert.match(statements[0].sql, /^INSERT INTO push_subscriptions/);
+      return [];
+    },
+  };
+  let finish;
+  const keyWork = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const storage = fakeStorage({});
+  const relay = { ctx: { storage }, env: { ...vapid, DB }, keyWork, driverSocket: () => ({}), lastSeen: () => Date.now(), stale: () => false };
+  const dana = browser();
+  const registering = new HomeAlerts(relay).subscribe({ user: "u1", key_id: "0a1b2c3d", endpoint: dana.row.endpoint, p256dh: dana.row.p256dh, auth: dana.row.auth }, HOME);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(looked, [], "not looked up while the key work waits");
+  // The queued work records that this account uses the key, then ends.
+  linked.add(`${HOME}|0a1b2c3d|u1`);
+  finish();
+  assert.deepEqual(await registering, { ok: true });
+  assert.deepEqual(looked, [`${HOME}|0a1b2c3d|u1`]);
 });

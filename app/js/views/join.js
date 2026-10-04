@@ -101,6 +101,22 @@ function invitationKey(invitation) {
   return `${invitation.home}.${invitation.invitation}`;
 }
 
+// An invitation that reached this device without its link (ADR-053): pasted (Paste invitation
+// link), or sealed by another device of the account, which approved this one. It is kept as a
+// link's is and the join page opens; `accept`: accepted at once (the new device asked to join, and
+// has no key to replace).
+export function useInvitation(text, navigate, { accept: now = false } = {}) {
+  storeInvitation(text);
+  ui.joinWait = null;
+  ui.joinMessage = null;
+  ui.joinChecked = null;
+  ui.joinConfirmed = false;
+  navigate("#/join");
+  // Accepted from memory even where this tab cannot keep it.
+  const invitation = storedInvitation() || parseInvitation(text);
+  if (now && invitation) accept(invitation, navigate, { confirmed: true });
+}
+
 // `confirmed`: this device's key may be replaced without asking again (asked at the first tap).
 async function accept(invitation, navigate, { confirmed = false } = {}) {
   // This device already has a key (its home, or another): the invitation's key replaces it.

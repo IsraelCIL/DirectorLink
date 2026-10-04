@@ -82,6 +82,7 @@ Supported device families (1.2.0):
 6. DoorBird doorbells (rings, and opening their door)
 7. Fans (the Control4 fan proxy: on, off and four speeds; 1.2.0)
 8. The alarm's status (security partitions), read-only and off by default (1.2.0, ADR-038)
+9. Samsung refrigerators through the Samsung Refrigerator (DirectorLink) driver: temperatures, the door, the water filter, and Power Cool, Power Freeze, Sabbath Mode and the ice maker (1.7.0, ADR-049)
 
 Policy for everything else:
 

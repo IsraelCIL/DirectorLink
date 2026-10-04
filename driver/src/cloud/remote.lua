@@ -5,6 +5,9 @@
 --   join   a sealed request from someone opening an invitation link; answered with their new key
 --   claim  the cloud checks a claim token, which proves that whoever claims this home holds an
 --          admin key here on the home network
+-- And one that is not sealed (1.7.0, ADR-051):
+--   link   a scene's link, run from a phone's automation: the link's id and secret, checked against
+--          the hash kept here (src/api/handlers/scene_links.lua); answered with how it went
 -- Problems the relay has to know about (unknown key, broken seal, replay) are sent in the clear as
 -- a `code`; they reveal nothing about the home. Remote.handleLocal opens requests sealed the same
 -- way on the home network (POST /v1/sealed, naming the home "lan").
@@ -16,6 +19,7 @@ local Clock = require("src.core.clock")
 local Lock = require("src.cloud.lock")
 local Store = require("src.core.store")
 local Activity = require("src.core.activity")
+local SceneLinkHandlers = require("src.api.handlers.scene_links")
 
 local Remote = {}
 
@@ -377,10 +381,18 @@ end
 -- True when `message` was one of the account messages (handled, or refused with a code).
 function Remote.handle(message, send)
     local kind = message.type
-    if kind ~= "e2e" and kind ~= "join" and kind ~= "claim" then
+    if kind ~= "e2e" and kind ~= "join" and kind ~= "claim" and kind ~= "link" then
         return false
     end
     if type(message.id) ~= "string" or message.id == "" then
+        return true
+    end
+    if kind == "link" then
+        local ok, err = pcall(SceneLinkHandlers.relayRun, state.services, message, send)
+        if not ok then
+            log("error", "scene link run failed", { error = tostring(err) })
+            send({ type = "link_result", id = message.id, ok = false, code = "INTERNAL" })
+        end
         return true
     end
     if kind == "claim" then

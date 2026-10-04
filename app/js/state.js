@@ -41,6 +41,7 @@ export const state = {
   cameras: [],
   relays: [], // doors and gates; [] on drivers without /v1/relays
   doorbells: [], // DoorBird doorstations; [] on drivers without /v1/doorbells
+  refrigerators: [], // Samsung refrigerators (1.7.0); [] on drivers without /v1/refrigerators
   alarm: null, // GET /v1/alarm (alarm.js): { enabled, partitions }, read-only; null when not shown
   music: null, // GET /v1/music (music.js): { enabled, status, items }, the Sonos rooms; null when not shown
   // This key's role (GET /v1/api-keys/current): viewer < member < doors < admin.
@@ -117,6 +118,7 @@ export const KINDS = {
   camera: { list: "cameras", path: "/v1/cameras" },
   relay: { list: "relays", path: "/v1/relays" },
   doorbell: { list: "doorbells", path: "/v1/doorbells" },
+  refrigerator: { list: "refrigerators", path: "/v1/refrigerators" },
 };
 
 // Roles, lowest first. can("member") is true for member, doors and admin keys.

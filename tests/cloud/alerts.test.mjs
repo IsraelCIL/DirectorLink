@@ -1,4 +1,4 @@
-// Alerts on admins' devices (cloud/src/alerts.js, ADR-047) end to end: the Worker under
+// Alerts (cloud/src/alerts.js, ADR-047, ADR-050) end to end: the Worker under
 // `wrangler dev`, a fake Google, a fake controller (the relay protocol, sealing like the driver) and
 // a fake push service (fake-push.mjs) that checks each push's VAPID signature and opens its message
 // as the browser would. The alert's minutes are 0.1 (6 s), an alert that did not get through is
@@ -7,6 +7,7 @@
 //   node --test tests/cloud/alerts.test.mjs
 
 import assert from "node:assert/strict";
+import { createCipheriv, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { after, afterEach, before, test } from "node:test";
@@ -448,6 +449,139 @@ test("Apple's consent-revoked and account-deleted end the account's alerts, as s
     await sleep(1000);
     assert.deepEqual(push.messagesFor(browser), [], `${type}: no more alerts on that browser`);
   }
+});
+
+// --- Alerts sealed to keys (ADR-050) ---------------------------------------------------------------
+
+// A detail sealed to the key of `apiKey`, as the driver seals it (tests/vectors/alert.json): its
+// JSON padded with spaces to 496 bytes, so every part is 684 characters of base64.
+function sealedFor(apiKey, homeId, keyId, detail) {
+  const alertKey = createHmac("sha256", lockKey(apiKey)).update("DirectorLink alert v1").digest();
+  const enc = createHmac("sha256", alertKey).update("enc").digest();
+  const mac = createHmac("sha256", alertKey).update("mac").digest();
+  const ivBytes = randomBytes(16);
+  const cipher = createCipheriv("aes-256-cbc", enc, ivBytes);
+  const text = JSON.stringify(detail);
+  const padded = text + " ".repeat(Math.max(0, 496 - Buffer.byteLength(text)));
+  const ct = Buffer.concat([cipher.update(padded, "utf8"), cipher.final()]).toString("base64");
+  const iv = ivBytes.toString("base64");
+  return { iv, ct, mac: createHmac("sha256", mac).update(`alert v1|${homeId}|${keyId}|${iv}|${ct}`).digest("base64") };
+}
+
+// The controller's notify message for these keys (id -> its part).
+function notify(state, parts, { brief = false, at = new Date().toISOString().replace(/\.\d+Z$/, "Z") } = {}) {
+  state.connection.sendJson({ type: "notify", at, for: parts, ...(brief ? { brief: true } : {}) });
+  return at;
+}
+
+const sealedTo = (browser) => of(browser, "sealed");
+
+// Registers `browser` with the key its device uses (1.7.0).
+function subscribeWithKey(state, cookie, browser, keyId, extra = {}) {
+  return call("POST", `/v1/homes/${state.home}/alerts`, { cookie, body: { ...browser.subscription, key_id: keyId, ...extra } });
+}
+
+test("a sealed alert reaches only the browsers of the keys it names, registered by accounts that use them", TEST, async () => {
+  const { state, dana, keyId: danaKey } = await claimedHome();
+  const avi = await joins(state, dana, AVI);
+  await sleep(300);
+
+  // Any role registers with its own key; nobody with another's.
+  const aviBrowser = push.subscribe();
+  const registered = await subscribeWithKey(state, avi.cookie, aviBrowser, avi.keyId);
+  assert.equal(registered.status, 201, registered.text);
+  const stolen = await subscribeWithKey(state, avi.cookie, push.subscribe(), danaKey);
+  assert.equal(stolen.status, 403);
+  assert.equal(stolen.json.code, "KEY_NOT_LINKED");
+  assert.equal((await subscribeWithKey(state, avi.cookie, push.subscribe(), "nothex!")).json.code, "INVALID_SUBSCRIPTION");
+  assert.equal((await subscribeWithKey(state, avi.cookie, push.subscribe(), avi.keyId, { offline: "yes" })).json.code, "INVALID_SUBSCRIPTION");
+  const noa = await signIn(NOA);
+  assert.equal((await subscribeWithKey(state, noa, push.subscribe(), avi.keyId)).json.code, "NOT_A_MEMBER");
+  const danaBrowser = push.subscribe();
+  assert.equal((await subscribeWithKey(state, dana, danaBrowser, danaKey)).status, 201);
+  // Dana's other browser, registered by an app before 1.7.0 (no key).
+  const oldBrowser = await subscribed(state, dana);
+
+  // For Avi's key only: his browser, nobody else's.
+  const aviPart = sealedFor(state.keys.get(avi.keyId), state.home, avi.keyId, { v: 1, kind: "doorbell", name: "Front Gate" });
+  const at = notify(state, { [avi.keyId]: aviPart }, { brief: true });
+  const [message] = await eventually(async () => {
+    const found = sealedTo(aviBrowser);
+    return found.length ? found : null;
+  }, "the alert at Avi's browser");
+  assert.deepEqual(message, { kind: "sealed", home: state.home, key: avi.keyId, at: new Date(at).toISOString(), sealed: aviPart }, "the part as sealed, and nothing it could read");
+  const delivered = push.received.find((entry) => entry.id === aviBrowser.id);
+  assert.equal(delivered.headers.ttl, "60", "a ring is kept a minute");
+  assert.equal(delivered.headers.urgency, "high");
+  await sleep(500);
+  assert.deepEqual(push.messagesFor(danaBrowser), []);
+  assert.deepEqual(push.messagesFor(oldBrowser), []);
+
+  // For both keys: each browser its own key's part; the app before 1.7.0 still gets nothing.
+  const danaPart = sealedFor(state.keys.get(danaKey), state.home, danaKey, { v: 1, kind: "door_opened", name: "Main Door" });
+  notify(state, { [avi.keyId]: aviPart, [danaKey]: danaPart });
+  await eventually(async () => sealedTo(danaBrowser).length === 1 && sealedTo(aviBrowser).length === 2, "both browsers");
+  assert.deepEqual(sealedTo(danaBrowser)[0].sealed, danaPart);
+  assert.equal(push.received.filter((entry) => entry.id === danaBrowser.id)[0].headers.ttl, "43200", "other alerts are kept 12 hours");
+  await sleep(500);
+  assert.deepEqual(push.messagesFor(oldBrowser), []);
+
+  // Not sealed parts, or not for key ids: nothing goes.
+  for (const parts of [{ [avi.keyId]: { ...aviPart, ct: "not base64!" } }, { NOTAKEY1: aviPart }, {}, [aviPart]]) {
+    notify(state, parts);
+  }
+  await sleep(1000);
+  assert.equal(sealedTo(aviBrowser).length, 2, "nothing more");
+  assert.ok(logged("notify_ignored", state.home));
+
+  // Avi's key revoked at home: his browser is forgotten, and gets nothing.
+  state.keys.delete(avi.keyId);
+  state.announce();
+  await sleep(500);
+  notify(state, { [avi.keyId]: aviPart, [danaKey]: danaPart });
+  await eventually(async () => sealedTo(danaBrowser).length === 2, "Dana's second alert");
+  await sleep(500);
+  assert.equal(sealedTo(aviBrowser).length, 2, "a revoked key's browser gets nothing");
+  assert.ok(!worker.output().split("\n").some((line) => line.includes('"event":"notify_sent"') && /Front Gate|Main Door|doorbell|door_opened/.test(line)), "the logs say how many, never what");
+});
+
+test("at most sixty sealed alerts an hour reach a home's browsers", TEST, async () => {
+  const { state, dana, keyId } = await claimedHome();
+  const browser = push.subscribe();
+  assert.equal((await subscribeWithKey(state, dana, browser, keyId)).status, 201);
+  const part = sealedFor(state.keys.get(keyId), state.home, keyId, { v: 1, kind: "doorbell" });
+  for (let index = 0; index < 62; index += 1) {
+    notify(state, { [keyId]: part });
+  }
+  await eventually(async () => sealedTo(browser).length === 60, "sixty alerts", 15000);
+  await eventually(async () => logged("notify_limited", state.home), "the limit to be logged");
+  await sleep(1000);
+  assert.equal(sealedTo(browser).length, 60, "the sixty-first and after wait for the hour");
+});
+
+test("offline alerts reach the admin keys' browsers that want them, and the browsers of apps before 1.7.0", TEST, async () => {
+  const { state, dana, keyId } = await claimedHome();
+  const avi = await joins(state, dana, AVI);
+  await sleep(300);
+  const wants = push.subscribe();
+  assert.equal((await subscribeWithKey(state, dana, wants, keyId)).status, 201);
+  const declines = push.subscribe();
+  assert.equal((await subscribeWithKey(state, dana, declines, keyId, { offline: false })).status, 201);
+  const old = await subscribed(state, dana);
+  const member = push.subscribe();
+  assert.equal((await subscribeWithKey(state, avi.cookie, member, avi.keyId)).status, 201);
+
+  // A schedule that failed, from a driver before 1.7.0: every admin's browser, as in 1.6.0.
+  state.connection.sendJson({ type: "alert", kind: "schedule_failed", at: new Date().toISOString() });
+  await eventually(async () => [wants, declines, old].every((browser) => of(browser, "schedule_failed").length === 1), "the admins' browsers");
+  await sleep(500);
+  assert.deepEqual(push.messagesFor(member), [], "not a member's");
+
+  await state.connection.close();
+  await eventually(async () => of(wants, "offline").length === 1 && of(old, "offline").length === 1, "the offline alert", OFFLINE_MS + 6000);
+  await sleep(1000);
+  assert.deepEqual(of(declines, "offline"), [], "a browser that chose not to");
+  assert.deepEqual(of(member, "offline"), [], "a member's");
 });
 
 // A deploy restarts every Durable Object and ends its sockets without webSocketClose; the drivers

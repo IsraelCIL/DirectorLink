@@ -41,15 +41,17 @@ driver/     the DriverWorks driver
   src/auth/       API keys, roles, pairing, profiles, invitations
   src/adapters/   Control4 proxy adapters (Light V2, Light V1 (legacy Light proxy), Thermostat V2, Control4
                   thermostat proxy, Fan, Blind, Camera, KNX Contact/Relay, DoorBird, security
-                  partitions: read-only, ADR-038)
+                  partitions: read-only, ADR-038; Samsung refrigerators through their DirectorLink
+                  driver's variables, ADR-049)
   src/cloud/      remote access: WebSocket client, relay connection (docs/RELAY.md), the end-to-end
                   lock (lock.lua) and sealed requests, claims and joins (remote.lua); automatic
                   backups to the account, sealed to the backup password's key (auto_backup.lua,
-                  backup_seal.lua; ADR-048)
+                  backup_seal.lua; ADR-048); alerts sealed to each device's key (alerts.lua; ADR-050)
   src/control4/   discovery and normalization; Director's project events (Composer changes, read
                   again without a restart) and device events; camera snapshots
   src/core/       json, log, store, registry, version; random (secrets) and x25519 (pairing);
-                  scenes, schedules, scheduler, sun, weather, installer view; room names and layout;
+                  scenes, scene links (a private link per scene for the phone's automations,
+                  ADR-051), schedules, scheduler, sun, weather, installer view; room names and layout;
                   backup (backup and restore, ADR-042; docs/BACKUP.md);
                   activity (the history admins read, ADR-046; docs/HISTORY.md);
                   the Jewish calendar (jewish_calendar, the service, and its pure engine: hebrew_date,

@@ -9,8 +9,9 @@
 // survive hibernation lives in the socket's attachment or in storage:
 //
 //   attachment  { conn, home, connectedAt, version, lastSeen,         per socket (milliseconds)
-//                 pingS, stale }                                      ping interval from the hello;
-//                                                                     when it was found quiet
+//                 pingS, stale, features }                            ping interval from the hello;
+//                                                                     when it was found quiet; what
+//                                                                     the hello says it takes (1.7.0)
 //   storage     secret_sha256                                         SHA-256 hex of the home_secret,
 //                                                                     trusted on first use
 //               connected_at, disconnected_at, last_seen, version     for the status (ISO times)
@@ -30,8 +31,10 @@ import { bearerToken, json, problem, sameSecret, sha256Hex } from "./http.js";
 import { recordUsedKey, syncKeys, validKeyList } from "./member-keys.js";
 import { cancelHomeInvitation, registerHomeInvitation } from "./homes.js";
 import { receiveBackupChunk } from "./backups.js";
-// Alerts to the home's admins (ADR-047): this object tells alerts.js when the driver connects and
-// disconnects, the admin key ids and the controller's "alert" messages, and runs its alarms.
+// Scene links (ADR-051): a phone's automation runs a scene; the controller checks the secret.
+import { LINK_ID, LINK_SECRET, RESULT_MESSAGES, linkNotFound } from "./scene-links.js";
+// Alerts (ADR-047, ADR-050): this object tells alerts.js when the driver connects and disconnects,
+// the admin key ids and the controller's "alert" and "notify" messages, and runs its alarms.
 import { HomeAlerts } from "./alerts.js";
 
 const DRIVER = "driver";
@@ -47,6 +50,29 @@ const DEFAULT_RECONNECT_WAIT_MS = 8000;
 // STALE_PINGS of its ping intervals is stale. Drivers before 1.6.0 announce no interval: 25 s.
 const STALE_PINGS = 2.5;
 const DEFAULT_PING_S = 25;
+// Scene links (ADR-051): at most this many runs a minute reach the home, whatever their link.
+const LINK_RUNS_PER_MINUTE = 30;
+// A client (an address; an IPv6 one by its /64) whose runs were refused as unknown this many times
+// within LINK_MISS_WINDOW_MS gets 429 until the first of them is that old, before its runs count
+// against the home's limit: someone guessing from one place cannot use up the family's runs. At
+// most LINK_CLIENTS clients are remembered (the one seen longest ago goes first), in memory only.
+const LINK_MISSES_PER_CLIENT = 10;
+const LINK_MISS_WINDOW_MS = 10 * 60 * 1000;
+const LINK_CLIENTS = 1000;
+
+// The client a scene link's run came from (CF-Connecting-IP), for its limit: an IPv4 address, or
+// the first 64 bits of an IPv6 address (one subscriber's network: the rest is chosen at will).
+export function linkClient(address) {
+  const text = String(address ?? "").trim().toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (mapped) return mapped[1];
+  if (!text.includes(":")) return text;
+  const [head, tail] = text.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? front : [...front, ...Array(Math.max(0, 8 - front.length - back.length)).fill("0"), ...back];
+  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
 
 export class HomeRelay extends DurableObject {
   constructor(ctx, env) {
@@ -64,6 +90,11 @@ export class HomeRelay extends DurableObject {
     this.keyWork = Promise.resolve();
     this.announced = undefined;
     this.alerts = new HomeAlerts(this);
+    // When the last scene link runs went to the home (milliseconds), for its limit, and when each
+    // client's last runs were refused as unknown (linkClient -> [ms], oldest seen first). Memory is
+    // enough: a flood keeps the object awake.
+    this.linkRuns = [];
+    this.linkMisses = new Map();
   }
 
   // Queues `work` behind the key work already waiting; returns when it is done.
@@ -97,6 +128,8 @@ export class HomeRelay extends DurableObject {
         return this.replaceSecret(await request.json(), homeId);
       case "/alerts":
         return json(await this.alerts.request(await request.json(), homeId));
+      case "/link":
+        return this.link(await request.json(), homeId, request.headers.get("X-DirectorLink-Client"));
       default:
         return problem(404, "NOT_FOUND", "Unknown relay operation");
     }
@@ -171,6 +204,8 @@ export class HomeRelay extends DurableObject {
     if (type === "hello") {
       attachment.version = cleanVersion(data.version) ?? attachment.version ?? null;
       attachment.pingS = pingSeconds(data.ping_s);
+      // What the driver takes besides what every version does (1.7.0: scene_links).
+      attachment.features = Array.isArray(data.features) ? data.features.filter((item) => typeof item === "string" && item.length <= 32).slice(0, 16) : [];
     }
     ws.serializeAttachment(attachment);
 
@@ -258,11 +293,16 @@ export class HomeRelay extends DurableObject {
         }
         return;
       case "alert":
-        // A schedule failed at home: the admins are alerted, without names (alerts.js).
+        // A schedule failed at home (drivers before 1.7.0): the admins are alerted, without names (alerts.js).
         await this.alerts.fromHome(data, attachment.home);
+        return;
+      case "notify":
+        // An alert sealed to some of the home's keys (1.7.0, ADR-050): to their browsers (alerts.js).
+        await this.alerts.notify(data, attachment.home);
         return;
       case "response":
       case "claim_result":
+      case "link_result":
         if (typeof data.id !== "string" || !this.settle(data.id, { message: data })) {
           log("response_ignored", { home: attachment.home, type, id: data.id ?? null, why: "no request is waiting for this id" });
         }
@@ -564,6 +604,114 @@ export class HomeRelay extends DurableObject {
     const { id: _id, ...reply } = outcome.message;
     log("message_relayed", { home: homeId, type: message.type, ok: reply.ok ?? Boolean(reply.envelope), code: reply.code ?? null, ms });
     return json(reply);
+  }
+
+  // A scene link's run (ADR-051, scene-links.js): `input` { link, secret }, already checked for
+  // shape by the Worker; `address` the phone's (CF-Connecting-IP). Only a driver whose hello lists
+  // scene_links gets it (an older one would ignore it, and the phone would wait 15 s): otherwise, as
+  // for any unknown link, 404.
+  async link(input, homeId, address) {
+    const linkId = typeof input?.link === "string" ? input.link : "";
+    const secret = typeof input?.secret === "string" ? input.secret : "";
+    if (!LINK_ID.test(linkId) || !LINK_SECRET.test(secret)) {
+      return linkNotFound();
+    }
+    const started = Date.now();
+    const client = linkClient(address);
+    // Never the secret nor the address: the home, the link's id, the answer and why.
+    const done = (status, fields = {}) => {
+      if (status === 404) this.linkMissed(client, Date.now());
+      log("link_run", { home: homeId, link: linkId, status, ms: Date.now() - started, ...fields });
+    };
+    const guessing = this.linkMissWait(client, started);
+    if (guessing) {
+      log("link_run", { home: homeId, link: linkId, status: 429, ms: 0, why: "client limit" });
+      return problem(429, "TOO_MANY_RUNS", "Too many runs of links that do not work from here; try again later", { "Retry-After": String(guessing) });
+    }
+    const wait = this.linkRunWait(started);
+    if (wait) {
+      done(429, { why: "home limit" });
+      return problem(429, "TOO_MANY_RUNS", "Too many runs for this home; try again in a minute", { "Retry-After": String(wait) });
+    }
+    const ws = await this.liveDriver();
+    if (!ws) {
+      done(503);
+      return problem(503, "HOME_OFFLINE", "The home is not connected to the relay");
+    }
+    const { conn, features } = ws.deserializeAttachment() ?? {};
+    if (!Array.isArray(features) || !features.includes("scene_links")) {
+      done(404, { why: "driver without links" });
+      return linkNotFound();
+    }
+    const id = crypto.randomUUID();
+    const timeoutMs = requestTimeoutMs(this.env);
+    const outcome = await new Promise((resolve) => {
+      const timer = setTimeout(() => this.settle(id, { timeout: true }), timeoutMs);
+      this.pending.set(id, { resolve, timer, conn });
+      try {
+        ws.send(JSON.stringify({ type: "link", id, link: linkId, secret }));
+      } catch (error) {
+        this.settle(id, { failed: `The home's connection could not be written (${error?.message ?? error})` });
+      }
+    });
+    if (outcome.timeout) {
+      done(504);
+      return problem(504, "HOME_TIMEOUT", `The home did not answer within ${timeoutMs / 1000} s`);
+    }
+    if (outcome.failed) {
+      done(502, { why: outcome.failed });
+      return problem(502, "HOME_DISCONNECTED", outcome.failed);
+    }
+    const reply = outcome.message ?? {};
+    if (reply.ok === true && Object.hasOwn(RESULT_MESSAGES, reply.result)) {
+      done(200, { result: reply.result });
+      return json({ result: reply.result, message: RESULT_MESSAGES[reply.result] });
+    }
+    if (reply.code === "RATE_LIMITED") {
+      const retry = Math.min(60, Math.max(1, Math.round(Number(reply.retry_s) || 60)));
+      done(429, { why: "link limit" });
+      return problem(429, "TOO_MANY_RUNS", "This link ran too often; try again in a minute", { "Retry-After": String(retry) });
+    }
+    if (reply.code === "INTERNAL") {
+      done(502, { why: "the home failed" });
+      return problem(502, "HOME_FAILED", "The home could not run the scene");
+    }
+    done(404);
+    return linkNotFound();
+  }
+
+  // Seconds until `client` may run a scene link again, after LINK_MISSES_PER_CLIENT refused as
+  // unknown within LINK_MISS_WINDOW_MS; 0 when it may now.
+  linkMissWait(client, now) {
+    const misses = (this.linkMisses.get(client) ?? []).filter((at) => now - at < LINK_MISS_WINDOW_MS && at <= now);
+    if (!misses.length) {
+      this.linkMisses.delete(client);
+      return 0;
+    }
+    this.linkMisses.set(client, misses);
+    return misses.length >= LINK_MISSES_PER_CLIENT ? Math.max(1, Math.ceil((LINK_MISS_WINDOW_MS - (now - misses[0])) / 1000)) : 0;
+  }
+
+  // A run of `client` was refused as unknown (404). The client goes to the end of the Map's order,
+  // and the one seen longest ago goes when there are too many.
+  linkMissed(client, now) {
+    const misses = this.linkMisses.get(client) ?? [];
+    this.linkMisses.delete(client);
+    misses.push(now);
+    this.linkMisses.set(client, misses.slice(-LINK_MISSES_PER_CLIENT));
+    while (this.linkMisses.size > LINK_CLIENTS) {
+      this.linkMisses.delete(this.linkMisses.keys().next().value);
+    }
+  }
+
+  // Seconds until another scene link run may go to the home, or 0 when it may now (and it counts).
+  linkRunWait(now) {
+    this.linkRuns = this.linkRuns.filter((at) => now - at < 60000 && at <= now);
+    if (this.linkRuns.length >= LINK_RUNS_PER_MINUTE) {
+      return Math.max(1, Math.ceil((60000 - (now - this.linkRuns[0])) / 1000));
+    }
+    this.linkRuns.push(now);
+    return 0;
   }
 
   settle(id, outcome) {

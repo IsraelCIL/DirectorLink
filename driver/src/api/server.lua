@@ -23,6 +23,7 @@ local HANDLERS = {
     cameras = require("src.api.handlers.cameras"),
     relays = require("src.api.handlers.relays"),
     doorbells = require("src.api.handlers.doorbells"),
+    refrigerators = require("src.api.handlers.refrigerators"),
     alarm = require("src.api.handlers.alarm"),
     music = require("src.api.handlers.music"),
     logs = require("src.api.handlers.logs"),
@@ -30,11 +31,13 @@ local HANDLERS = {
     invitations = require("src.api.handlers.invitations"),
     profiles = require("src.api.handlers.profiles"),
     scenes = require("src.api.handlers.scenes"),
+    scene_links = require("src.api.handlers.scene_links"),
     schedules = require("src.api.handlers.schedules"),
     calendar = require("src.api.handlers.calendar"),
     sealed = require("src.api.handlers.sealed"),
     backup = require("src.api.handlers.backup"),
     activity = require("src.api.handlers.activity"),
+    alerts = require("src.api.handlers.alerts"),
 }
 
 local Server = {}

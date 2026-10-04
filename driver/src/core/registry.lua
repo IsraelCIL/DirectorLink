@@ -135,6 +135,19 @@ function Registry.doorbellList()
     return sortedList(doorbells)
 end
 
+-- Samsung refrigerators (ADR-049).
+function Registry.refrigeratorList()
+    local refrigerators = {}
+
+    for id, device in pairs(Registry.devices or {}) do
+        if device.kind == "refrigerator" and device.supported == true then
+            refrigerators[id] = device
+        end
+    end
+
+    return sortedList(refrigerators)
+end
+
 function Registry.lightList()
     local lights = {}
 
@@ -176,6 +189,7 @@ function Registry.counts()
     local supportedCameras = 0
     local supportedRelays = 0
     local supportedDoorbells = 0
+    local supportedRefrigerators = 0
     local alarmPartitions = 0
 
     for _, device in pairs(Registry.devices) do
@@ -208,6 +222,8 @@ function Registry.counts()
                 supportedRelays = supportedRelays + 1
             elseif device.kind == "doorbell" then
                 supportedDoorbells = supportedDoorbells + 1
+            elseif device.kind == "refrigerator" then
+                supportedRefrigerators = supportedRefrigerators + 1
             end
         end
     end
@@ -227,6 +243,7 @@ function Registry.counts()
         supported_cameras = supportedCameras,
         supported_relays = supportedRelays,
         supported_doorbells = supportedDoorbells,
+        supported_refrigerators = supportedRefrigerators,
         alarm_partitions = alarmPartitions,
     }
 end

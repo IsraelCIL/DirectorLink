@@ -31,7 +31,7 @@
 
     <main id="main" tabindex="-1" class="document">
       <h1>Privacy</h1>
-      <p class="updated">Last updated 3 October 2026</p>
+      <p class="updated">Last updated 4 October 2026</p>
       <p class="lead">
         DirectorLink keeps your home's data between your own devices and your controller. This page
         lists exactly what reaches DirectorLink's servers.
@@ -101,6 +101,14 @@
         you asked, with a six-digit code that you read out to them.
       </p>
       <p>
+        If a new device of yours asks to join your home from another device (for example the app on
+        your iPhone's Home Screen), our servers pass between your two devices what the new device
+        calls itself (such as "Safari on iPhone"), a public key from each, and the invitation your
+        other device makes for it, encrypted so that only the new device can open it. We cannot read
+        the invitation. A request works for 10 minutes; it is deleted once used, declined or
+        withdrawn, and otherwise within a day.
+      </p>
+      <p>
         A device that has never signed in does not contact our account service until you tap
         <strong>Sign in</strong> or open an invitation link. It then asks which ways to sign in are
         available, without sending anything about you or your home.
@@ -111,10 +119,12 @@
         <li>Your account: your Google and/or Apple account ID, email address and name, and when you signed in.</li>
         <li>Sessions: a random identifier, kept only as a hash, for 30 days or until you sign out. Expired ones are deleted every day.</li>
         <li>Homes: which homes your account owns or belongs to, and since when, and the ids (never the keys themselves) of the access keys your account uses at each home.</li>
+        <li>Three totals, counted once an hour: how many homes are linked to an account, how many accounts can sign in, and how often the driver was downloaded. Nothing about any one home or person.</li>
         <li>Invitations waiting to be accepted: the invited email, the expiry date, and who registered it (your controller, or the home's owner). A used invitation is deleted when it is accepted, an expired one a day after it expires.</li>
         <li>Requests to join a home with an invitation sent to another email address: the account asking, the invitation, the six-digit code, and whether the owner approved or refused. They are deleted with the invitation, or when either account is deleted.</li>
+        <li>Requests from a new device of yours to join your home: what the device calls itself, the public keys of the two devices, and the encrypted invitation, which we cannot open. A request works for 10 minutes and is deleted once used, declined or withdrawn, otherwise within a day.</li>
         <li>Automatic backups, if an admin turns them on: each one encrypted on your controller so that only your backup password opens it, with its size, when it arrived, and which backup password it is for. We cannot open them. The last 7 days are kept, one a day.</li>
-        <li>Alerts, if an admin switches them on for a device: that browser's push address and the keys its alerts are encrypted with, which account registered it, for which home, and since when; and which of the home's access keys are admin keys (their ids only). A device's registration is deleted when its alerts are turned off, it signs out, the account leaves the home or is deleted, or you sign out everywhere.</li>
+        <li>Alerts, if someone switches them on for a device: that browser's push address and the keys its alerts are encrypted with, which account registered it, the id of the access key the device uses, for which home, since when, and whether it wants the offline alert; which of the home's access keys are admin keys (their ids only); and when the home last sent alerts, to count them. A device's registration is deleted when its alerts are turned off, it signs out, its access key is removed, the account leaves the home or is deleted, or you sign out everywhere.</li>
       </ul>
       <p>
         Our servers run on Cloudflare, which keeps short-lived technical logs (time, IP address, path
@@ -128,7 +138,22 @@
         reach your home through it. Every request and answer is also locked end to end, with keys that
         only your devices and your controller hold: our servers pass them along but cannot read or
         change them, and store none of them. What our servers do see is which account talks to which
-        home, when, and how much data.
+        home, when, and how much data. Scene links, below, are the one exception.
+      </p>
+
+      <h2>Scene links</h2>
+      <p>
+        An admin can give a scene a private link, so that a phone's own automations (iPhone Shortcuts,
+        an Android app, an NFC tag) can run it. Such a request cannot be locked end to end: the phone
+        sends the link and its secret to our servers over HTTPS, and they pass them to your controller,
+        which checks them and runs that one scene. So our servers see the link and its secret each time
+        it is used, with when and whether the scene ran, but never which scene it is: they have no
+        names. We keep no secret, and the secret is never in our logs. Each run is in our service
+        logs for a few days: the home, the link's id, the answer, whether the scene ran and how long
+        it took. Whoever has a link can run its scene until an admin removes or replaces it, or
+        revokes the key of the device that made it. A scene that opens doors or gates can never have
+        a link, so a link can switch at most lights, air conditioning, fans, blinds, music and
+        refrigerator settings, and homes without links send nothing of the kind.
       </p>
 
       <h2>Automatic backups</h2>
@@ -145,14 +170,34 @@
 
       <h2>Alerts</h2>
       <p>
-        A home's admins can switch on alerts for a device: a notification when the home has been
-        offline for 10 minutes, or when a schedule had a problem. They are sent through the push service
-        of the device's browser (Google, Mozilla, Apple or Microsoft), encrypted so that only that
-        browser can read them. An alert says only which of the two happened, at which home (by its
-        id) and when: never the name of a room, device, scene, schedule or person, and not even the
-        home's. The push service sees that an alert went to the device, when, and how large it was.
-        To know whether a schedule failed, your controller tells our servers only the time it
-        happened. The words you see are the app's, on your device.
+        Anyone with access to a home can switch on alerts for a device: a notification when someone
+        rings at the door, when the refrigerator door is left open, and, for admins, when a door or
+        gate is opened (if they choose), when a schedule had a problem, or when the home has been
+        offline for 10 minutes. Each device chooses which. Your controller decides who gets what, and
+        encrypts what happened (which doorbell, which door and who opened it, which schedule)
+        separately for each of those devices, with a key only that device and your controller hold:
+        our servers pass it on without being able to read it. They learn which devices' keys an
+        alert is for, when, and whether it is a doorbell's, which is kept for a minute only. Every
+        alert has the same size, but whom it is for can tell its kind: our servers know which keys
+        are admins', so an alert that is not a doorbell's and is for someone who is not an admin can
+        only be the refrigerator's. They never learn which doorbell, door or refrigerator, who opened
+        a door, or which schedule. The offline alert is our servers' own: it says only that, at which
+        home (by its id) and when.
+        Alerts are sent through the push service of the device's browser (Google, Mozilla, Apple or
+        Microsoft), encrypted so that only that browser can read them. The push service sees that an
+        alert went to the device, when, how long it may keep it, and its size, which is the same for
+        every alert. The words you see are the app's, on your device.
+      </p>
+
+      <h2>DirectorLink in numbers</h2>
+      <p>
+        Once an hour our servers count how many homes are linked to an account (a home stays counted
+        until its owner's account is deleted, also once it is no longer used), how many accounts can
+        sign in, and how often the driver was downloaded (from GitHub's public list of releases). Only
+        these three totals are kept, and anyone can read them at api.directorlink.io/v1/stats. Nothing
+        about any one home or person is in them, and your controller sends nothing for them. When this
+        website's home page opens, it asks for the totals, without cookies or anything about you, and
+        shows them once there are 25 homes.
       </p>
 
       <h2>Cookies</h2>

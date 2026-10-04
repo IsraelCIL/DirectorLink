@@ -385,6 +385,17 @@ function Keys.remote(id)
     return nil
 end
 
+-- Whether a key with this id is kept, without the look at expiry every other read makes (it tells
+-- the driver of keys that expired, Keys.onExpired): for what keys made (scene links).
+function Keys.exists(id)
+    for _, key in ipairs(state.keys) do
+        if key.id == id then
+            return true
+        end
+    end
+    return false
+end
+
 function Keys.touch(id)
     for _, key in ipairs(state.keys) do
         if key.id == id then

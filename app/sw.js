@@ -2,9 +2,9 @@
 // Same-origin GET requests are network-first with a short timeout and fall back to the cache,
 // so the app still opens when the internet is down but the home LAN (and the controller) is up.
 // Requests to the controller are cross-origin and are never intercepted.
-// It also opens the app when a doorbell notification is clicked, and shows alerts (push).
+// It also shows alerts (push), and opens the app where a notification's tap leads.
 
-const CACHE_NAME = "directorlink-shell-v39";
+const CACHE_NAME = "directorlink-shell-v40";
 const NETWORK_TIMEOUT_MS = 3000;
 
 // Each page is stored under every path that serves it: Cloudflare redirects /index.html -> /,
@@ -27,6 +27,8 @@ const ASSETS = [
   "/js/views/cloud-backup.js",
   "/js/lock.js",
   "/js/cpace.js",
+  "/js/device-join.js",
+  "/js/views/device-join.js",
   "/js/platform.js",
   "/js/qr.js",
   "/js/remote.js",
@@ -36,6 +38,8 @@ const ASSETS = [
   "/js/views/access.js",
   "/js/views/scenes.js",
   "/js/scenes.js",
+  "/js/views/scene-links.js",
+  "/js/scene-links.js",
   "/js/views/schedules.js",
   "/js/schedules.js",
   "/js/calendar.js",
@@ -46,6 +50,7 @@ const ASSETS = [
   "/js/dom.js",
   "/js/doorbells.js",
   "/js/fans.js",
+  "/js/refrigerators.js",
   "/js/favorites.js",
   "/js/find.js",
   "/js/i18n.js",
@@ -182,20 +187,39 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// Alerts (ADR-047): a push from api.directorlink.io says only what happened, at which home and when,
-// { kind: "offline" | "schedule_failed", home, at }, encrypted for this browser. The words are the
-// app's, in its language (js/alerts.js keeps them here); English when there are none. Every push
-// shows a notification, which opens the home's history.
+// Alerts (ADR-047, ADR-050): a push from api.directorlink.io is encrypted for this browser. The
+// servers' own alert says only what happened, at which home and when, { kind: "offline" |
+// "schedule_failed", home, at }. What the controller alerts about it seals to this device's key, so
+// that the servers cannot read it: { kind: "sealed", home, key, at, sealed: { iv, ct, mac } }; this
+// opens it with the alert key js/alerts.js keeps here, and says what happened and where (a doorbell
+// rang, a door or gate was opened and by whom, the refrigerator's door was left open, a schedule
+// failed). The words are the app's, in its language (js/alerts.js keeps them here); English when
+// there are none, and the general words when the detail is missing or does not open. Every push
+// shows a notification (browsers revoke a subscription that does not). Tapping a doorbell's opens
+// Home (its banner), a refrigerator's its room, any other the home's history.
 const ALERT_TEXTS_CACHE = "directorlink-alerts";
 const ALERT_TEXTS_PATH = "/alert-texts.json";
+const ALERT_KEY_PATH = "/alert-key.json";
 const ALERT_TEXTS = {
   lang: "en",
   dir: "ltr",
   title: "DirectorLink",
   offline: "Your home – DirectorLink has not reached it since {time}. Check the home’s internet connection and the controller.",
   schedule_failed: "Your home – a schedule had a problem at {time}. Open the app to see what happened.",
+  schedule_failed_named: "Your home – the schedule for {name} had a problem at {time}. Open the app to see what happened.",
   other: "Your home – something needs your attention. Open the app to see what happened.",
+  doorbell_title: "Someone is at the door",
+  doorbell: "{name} rang at {time}.",
+  door_opened: "{name} was opened by {who} at {time}.",
+  door_opened_scene: "{name} was opened by {who}, with the scene {scene}, at {time}.",
+  door_opened_control4: "{name} was opened in Control4 at {time}.",
+  door_held: "{name} was held open by {who} at {time}.",
+  who: "{person} ({device})",
+  unknown_device: "a removed device",
+  fridge_door: "{name} – the door has been open for at least {minutes} min ({time}).",
+  fridge_door_now: "{name} – the door was left open ({time}).",
 };
+const HISTORY_URL = "/#/settings/history";
 
 async function alertTexts() {
   try {
@@ -219,6 +243,108 @@ function alertTime(at, lang) {
   }
 }
 
+function fill(template, values) {
+  return String(template).replace(/\{(\w+)\}/g, (_, name) => (values[name] === undefined || values[name] === null ? "" : String(values[name])));
+}
+
+function bytesOf(base64) {
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function hmacOf(rawKey, text) {
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+}
+
+// What the controller sealed to this device (the same as driver/src/cloud/alerts.lua seals it,
+// tests/vectors/alert.json): the detail, or null when it is not for this device's key at this home,
+// or does not open. The MAC is checked before anything is decrypted.
+async function openSealed(alert) {
+  try {
+    const saved = await (await caches.open(ALERT_TEXTS_CACHE)).match(ALERT_KEY_PATH);
+    const own = saved ? await saved.json() : null;
+    const sealed = alert.sealed || {};
+    if (!own || own.home !== alert.home || own.key !== alert.key || typeof own.alert_key !== "string") return null;
+    const alertKey = bytesOf(own.alert_key);
+    const [enc, mac] = await Promise.all([hmacOf(alertKey, "enc"), hmacOf(alertKey, "mac")]);
+    const macKey = await crypto.subtle.importKey("raw", mac, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    const signed = new TextEncoder().encode(`alert v1|${alert.home}|${alert.key}|${sealed.iv}|${sealed.ct}`);
+    if (!(await crypto.subtle.verify("HMAC", macKey, bytesOf(sealed.mac), signed))) return null;
+    const encKey = await crypto.subtle.importKey("raw", enc, { name: "AES-CBC" }, false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-CBC", iv: bytesOf(sealed.iv) }, encKey, bytesOf(sealed.ct));
+    const detail = JSON.parse(new TextDecoder().decode(plaintext));
+    return detail && typeof detail === "object" && typeof detail.kind === "string" ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
+const text = (value) => (typeof value === "string" && value.trim() ? value : null);
+
+// Who opened a door, as the history says it: the person and the device.
+function whoText(who, texts) {
+  const device = text(who?.name) || texts.unknown_device;
+  const person = text(who?.profile);
+  return person && person !== device ? fill(texts.who, { person, device }) : device;
+}
+
+// The notification for a detail: { title, body, tag, url, ring }, or null for a kind this app does
+// not know (a newer controller's), which gets the general words.
+function sealedNotice(detail, texts, home) {
+  const time = alertTime(detail.at, texts.lang);
+  const name = text(detail.name);
+  const id = Number.isInteger(detail.id) ? detail.id : 0;
+  switch (detail.kind) {
+    case "doorbell":
+      if (!name) return null;
+      // The same tag as the app's own notification of a ring (js/doorbells.js): one per doorbell.
+      return { title: texts.doorbell_title, body: fill(texts.doorbell, { name, time }), tag: `doorbell-${id}`, url: "/#/", ring: text(detail.at) };
+    case "door_opened": {
+      if (!name) return null;
+      const by = detail.who || {};
+      const template = by.type === "control4" ? texts.door_opened_control4 : detail.action === "hold" ? texts.door_held : text(detail.via) ? texts.door_opened_scene : texts.door_opened;
+      return { title: texts.title, body: fill(template, { name, who: whoText(by, texts), scene: text(detail.via), time }), tag: `door-${id}`, url: HISTORY_URL };
+    }
+    case "fridge_door": {
+      if (!name) return null;
+      const minutes = Number.isInteger(detail.minutes) && detail.minutes > 0 ? detail.minutes : null;
+      const room = Number.isInteger(detail.room_id) && detail.room_id > 0 ? detail.room_id : null;
+      return { title: texts.title, body: fill(minutes ? texts.fridge_door : texts.fridge_door_now, { name, minutes, time }), tag: `fridge-${id}`, url: room ? `/#/room/${room}` : "/#/" };
+    }
+    case "schedule_failed":
+      return { title: texts.title, body: fill(name ? texts.schedule_failed_named : texts.schedule_failed, { name, time }), tag: `alert-schedule_failed-${home}`, url: HISTORY_URL };
+    default:
+      return null;
+  }
+}
+
+// Whether the app is open in front: it shows a ring on its own banner then.
+async function appInFront() {
+  try {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    return windows.some((item) => item.focused === true && item.visibilityState === "visible");
+  } catch {
+    return false;
+  }
+}
+
+async function showNotice(notice, texts) {
+  const options = { body: notice.body, tag: notice.tag, renotify: true, lang: texts.lang, dir: texts.dir, icon: "/icons/icon-192.png", data: { url: notice.url } };
+  if (notice.ring) {
+    // A ring this device already shows (the app noticed it first), or one the app shows on its
+    // banner now: the notification is still shown, as every push must be, but quietly, in place
+    // of the other (the same tag).
+    options.data.ring = notice.ring;
+    const shown = self.registration.getNotifications ? await self.registration.getNotifications({ tag: notice.tag }).catch(() => []) : [];
+    if (shown.some((item) => item.data?.ring === notice.ring) || (await appInFront())) {
+      options.renotify = false;
+      options.silent = true;
+    }
+  }
+  await self.registration.showNotification(notice.title, options);
+}
+
 async function showAlert(data) {
   let alert = null;
   try {
@@ -227,16 +353,28 @@ async function showAlert(data) {
     alert = null;
   }
   const texts = await alertTexts();
-  const kind = alert?.kind === "offline" || alert?.kind === "schedule_failed" ? alert.kind : "other";
   const home = /^[0-9a-f]{32}$/.test(alert?.home ?? "") ? alert.home : "";
+  if (alert?.kind === "sealed") {
+    try {
+      const detail = await openSealed(alert);
+      const notice = detail && sealedNotice(detail, texts, home);
+      if (notice) {
+        await showNotice(notice, texts);
+        return;
+      }
+    } catch {
+      // The general words, below.
+    }
+  }
+  const kind = alert?.kind === "offline" || alert?.kind === "schedule_failed" ? alert.kind : "other";
   await self.registration.showNotification(texts.title, {
-    body: String(texts[kind]).replace("{time}", kind === "other" ? "" : alertTime(alert.at, texts.lang)),
+    body: fill(texts[kind], { time: kind === "other" ? "" : alertTime(alert.at, texts.lang) }),
     tag: `alert-${kind}-${home}`,
     renotify: true,
     lang: texts.lang,
     dir: texts.dir,
     icon: "/icons/icon-192.png",
-    data: { url: "/#/settings/history" },
+    data: { url: HISTORY_URL },
   });
 }
 
@@ -244,8 +382,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(showAlert(event.data));
 });
 
-// A doorbell notification (shown while the app is open): bring the app to the front on Home,
-// or open it when no window is left. An alert's: the home's history.
+// A notification's tap: bring the app to the front where it says (a doorbell's: Home), or open it
+// there when no window is left.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = new URL(event.notification.data?.url || "/#/", self.location.origin).href;

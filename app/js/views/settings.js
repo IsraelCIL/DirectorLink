@@ -8,7 +8,7 @@ import { turnAlertsOff } from "../alerts.js";
 import { calendarOn, loadCalendar, noteCalendarOff, takeCalendarReveal } from "../calendar.js";
 import { IS_IOS } from "../platform.js";
 import { qrCanvas } from "../qr.js";
-import { approveHomeSecret, claimHome, homeStatus, invitationLink, registerInvitation, saveRemote, savedRemote } from "../remote.js";
+import { approveHomeSecret, claimHome, homeStatus, invitationLink, saveRemote, savedRemote } from "../remote.js";
 import { disableNotifications, enableNotifications, notificationSupport, notificationsOn } from "../doorbells.js";
 import { h, iconButton, name } from "../dom.js";
 import { LANGUAGES, formatDateTime, formatNumber, formatTime, languagePreference, t } from "../i18n.js";
@@ -18,10 +18,12 @@ import { setRoomHidden } from "../profile.js";
 import { installApp } from "../pwa.js";
 import { dropIndex, edgeScroll, keyTarget, moveItem, sameOrder, shiftOf, slotOffset } from "../reorder.js";
 import { api, checkInThroughAccount, connect, errorText, noteForbidden, revokeAndForget, roleLabel, saveRoomNames, useHost } from "../session.js";
+import { linksMadeBy, linksSupported } from "../scene-links.js";
 import { PALETTES, THEMES, palettePreference, themePreference } from "../theme.js";
 import { can, notify, state, ui } from "../state.js";
 import { alarmFact } from "./alarm.js";
 import { alertsPanel } from "./alerts.js";
+import { makeInvitation, pasteInvitationPanel } from "./device-join.js";
 import { backupPanel } from "./backup.js";
 import { historyRow } from "./history.js";
 import { notReadyState, offlineBanner, pageHeader, signInButtons } from "./common.js";
@@ -913,6 +915,19 @@ function calendarUnavailable() {
 
 // ---- controller ----------------------------------------------------------------------------
 
+// " The 2 scene links made on this device stop working too." for Forget and Pair again, when this
+// admin key made scene links (they go with it, ADR-051); "" otherwise, or when that is not known.
+async function ownLinksNote() {
+  if (!linksSupported() || !can("admin") || state.status !== "connected") return "";
+  try {
+    const [me, links] = await Promise.all([api("/v1/api-keys/current"), api("/v1/scene-links")]);
+    const count = linksMadeBy(links?.items, me?.id);
+    return count ? ` ${t("settings.controller.forgetLinks", { count })}` : "";
+  } catch {
+    return "";
+  }
+}
+
 function controllerSection(navigate) {
   const hostInput = h("input", {
     id: "settings-host",
@@ -966,9 +981,10 @@ function controllerSection(navigate) {
               devices: system.inventory.devices ?? 0,
               supported: system.inventory.supported_devices ?? 0,
             }),
-            // Drivers with fans (1.2.0) and doorbells (0.9.2) count them too.
+            // Drivers with fans (1.2.0), doorbells (0.9.2) and refrigerators (1.7.0) count them too.
             system.inventory.fans ? t("settings.controller.inventoryFans", { count: system.inventory.fans }) : null,
             system.inventory.doorbells ? t("settings.controller.inventoryDoorbells", { count: system.inventory.doorbells }) : null,
+            system.inventory.refrigerators ? t("settings.controller.inventoryRefrigerators", { count: system.inventory.refrigerators }) : null,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -1015,7 +1031,7 @@ function controllerSection(navigate) {
               class: "button button-secondary",
               dataset: { key: "settings-pair-again" },
               onclick: async () => {
-                if (!window.confirm(t("settings.controller.pairAgainConfirm"))) return;
+                if (!window.confirm(t("settings.controller.pairAgainConfirm") + (await ownLinksNote()))) return;
                 await revokeAndForget();
                 state.notice = { kind: "info", text: t("connect.pairNew") };
                 navigate("#/");
@@ -1033,7 +1049,7 @@ function controllerSection(navigate) {
               class: "button button-danger",
               dataset: { key: "settings-forget" },
               onclick: async () => {
-                if (!window.confirm(t("settings.controller.forgetConfirm"))) return;
+                if (!window.confirm(t("settings.controller.forgetConfirm") + (await ownLinksNote()))) return;
                 await revokeAndForget();
                 state.notice = { kind: "info", text: t("settings.controller.forgotten") };
                 navigate("#/");
@@ -1177,29 +1193,12 @@ async function createInvitation({ forSelf }) {
   ui.homeBusy = true;
   ui.homeMessage = null;
   notify();
-  let invitation = null;
   try {
-    // Just under 7 days: the account refuses invitations longer than that.
-    // For my other device, the new key joins my profile (drivers with profiles, 0.12.0 and later).
-    const body = { role, expires_in: forSelf ? 600 : 7 * 24 * 3600 - 300 };
-    if (forSelf && state.profile) body.for_me = true;
-    try {
-      // The controller registers it with the account service itself (1.0.0 and later).
-      invitation = await api("/v1/invitations", { method: "POST", body: { ...body, email } });
-    } catch (error) {
-      const field = error?.problem?.errors?.[0]?.field;
-      if (error?.code !== "INVALID_FIELD" || field !== "email") throw error;
-      // A driver before 1.0.0: the home's owner registers it from here.
-      invitation = await api("/v1/invitations", { method: "POST", body });
-      await registerInvitation(invitation.home_id, invitation, email);
-    }
+    // The same invitation as a device approving another of this account makes (ADR-053).
+    const invitation = await makeInvitation({ forSelf, email, role });
     ui.homeInvitation = { link: invitationLink(invitation.home_id, invitation), expiresAt: invitation.expires_at, forSelf, email };
     ui.inviteForm = false;
   } catch (error) {
-    // An invitation the account does not know can never be accepted: revoke it at home too.
-    if (invitation?.id) {
-      api(`/v1/invitations/${invitation.id}`, { method: "DELETE" }).catch(() => {});
-    }
     ui.homeMessage = { kind: "error", text: errorText(error) };
   } finally {
     ui.homeBusy = false;
@@ -1438,6 +1437,8 @@ function accountSection() {
     t("settings.account.cardTitle"),
     notice,
     ...body,
+    // An invitation link that opened elsewhere (iOS opens links in Safari, not the Home Screen app).
+    pasteInvitationPanel({ key: "account" }),
     h("p", { class: "field-help" }, h("a", { href: "https://directorlink.io/privacy", target: "_blank", rel: "noopener" }, t("settings.account.privacy")))
   );
 }

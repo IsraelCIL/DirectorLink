@@ -889,6 +889,36 @@ function tests.a_swapped_device_follows_its_name_and_a_door_is_never_moved()
     T.truthy(done)
 end
 
+-- Refrigerator steps and favorites (1.7.0, ADR-049) follow the refrigerator like any device: here it
+-- was added again in Composer, with new ids, the same name and room.
+function tests.a_refrigerator_step_and_favorite_follow_the_refrigerator()
+    local old = start(Mock.withRefrigerator(Mock.project()))
+    T.eq(T.http(old.mock, "POST", "/v1/scenes", { key = old.key, body = { name = "Shabbat fridge", steps = {
+        { type = "refrigerators", device_ids = { 141 }, set = { sabbath_mode = true } },
+        { type = "refrigerators", room_id = 10, set = { ice_maker = false } },
+    } } }).status, 201)
+    T.eq(T.http(old.mock, "PATCH", "/v1/profile", { key = old.key, body = { prefs = { favorites = { "refrigerator:141", "light:20" } } } }).status, 200)
+    local document = export(old)
+    T.eq(document.sections.scenes.scenes[1].steps[1].type, "refrigerators")
+
+    local s = start(Mock.withRefrigerator(Mock.project(), { protocol = 150, id = 151 }))
+    local done, preview = replace(s, document)
+    T.eq(#preview.references.by_name, 1)
+    T.eq(preview.references.by_name[1].kind, "refrigerator")
+    T.eq(preview.references.by_name[1].from, 141)
+    T.eq(preview.references.by_name[1].to, 151)
+    T.eq(preview.left_out.steps, 0)
+    local scene = sceneNamed(s, "Shabbat fridge")
+    T.same(scene.steps[1].device_ids, { 151 })
+    T.same(scene.steps[1].set, { sabbath_mode = true })
+    T.eq(scene.steps[2].room_id, 10)
+    T.same(list(s.mock, old.key, "/v1/profile").prefs.favorites, { "refrigerator:151", "light:20" })
+    T.truthy(done)
+    local before = #s.mock.commands
+    T.eq(T.http(s.mock, "POST", "/v1/scenes/" .. scene.id .. "/run", { key = old.key }).json.ran, 2)
+    T.eq(s.mock.commands[before + 1].device, 150, "to the refrigerator's driver as it is now")
+end
+
 -- The kitchen (10) and the living room (11) swapped their ids.
 local function swappedRooms()
     local project = Mock.project()

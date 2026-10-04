@@ -118,7 +118,8 @@ export function disableNotifications() {
 }
 
 // A notification for each ring while the app is open but not in front (the banner shows it
-// otherwise). There is no push yet: a closed app cannot notify.
+// otherwise). With the app closed, the controller's alert says it (Web Push, ADR-050, sw.js), with
+// the same tag; a ring that alert shows already is not shown again.
 export async function notifyRings(doorbells) {
   if (!doorbells.length || !notificationsOn()) return;
   if (!document.hidden && document.hasFocus()) return;
@@ -129,13 +130,14 @@ export async function notifyRings(doorbells) {
       tag: `doorbell-${doorbell.id}`,
       renotify: true,
       icon: "/icons/icon-192.png",
-      data: { url: "/#/" },
+      data: { url: "/#/", ring: doorbell.last_ring_at },
     };
     try {
       // Installed apps and Android need the service worker to show notifications.
       const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
       if (registration?.showNotification) {
-        await registration.showNotification(title, options);
+        const shown = registration.getNotifications ? await registration.getNotifications({ tag: options.tag }).catch(() => []) : [];
+        if (!shown.some((item) => item.data?.ring === doorbell.last_ring_at)) await registration.showNotification(title, options);
         continue;
       }
       const notification = new Notification(title, options);

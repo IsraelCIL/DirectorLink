@@ -16,6 +16,7 @@ import {
   deviceRoomId,
   fanIsOn,
   fanStateLabel,
+  fridgeStateLabel,
   lightIsOn,
   matchesFilter,
   modeLabel,
@@ -172,7 +173,7 @@ function favoritesSection({ openCamera, openFavoritesPicker }) {
   const items = favoriteDevices();
   const editing = ui.editFavorites;
   const hasDevices =
-    state.lights.length + state.thermostats.length + state.fans.length + state.blinds.length + state.cameras.length + state.relays.length + state.doorbells.length > 0;
+    state.lights.length + state.thermostats.length + state.fans.length + state.blinds.length + state.cameras.length + state.relays.length + state.doorbells.length + state.refrigerators.length > 0;
   if (!hasDevices) return null;
 
   const toggleEdit = h(
@@ -266,6 +267,10 @@ function favoriteTile({ entry, kind, device }, { editing, index, count, openCame
   } else if (kind === "blind") {
     stateClass = blindIsOpen(device) ? "is-open" : "";
     content = [h("span", { class: "fav-icon" }, icon("blinds")), name(device.name, "span", "fav-name"), room, h("span", { class: "fav-state" }, blindStateLabel(device, blindMove(device.id)))];
+  } else if (kind === "refrigerator") {
+    // The door open stands out, like a ring; offline says so.
+    stateClass = device.door_open === true ? "is-door-open" : "";
+    content = [h("span", { class: "fav-icon" }, icon("fridge")), name(device.name, "span", "fav-name"), room, h("span", { class: "fav-state" }, fridgeStateLabel(device))];
   } else if (kind === "camera") {
     content = [cameraPicture(device, 320), h("span", { class: "fav-caption" }, name(device.name, "span", "fav-name"))];
     stateClass = "fav-camera";
@@ -391,6 +396,8 @@ function roomStatus(group) {
   if (group.cameras.length) parts.push(t("rooms.cameras", { count: group.cameras.length }));
   if (group.relays.length) parts.push(t("rooms.relays", { count: group.relays.length }));
   if (group.doorbells.length) parts.push(t("rooms.doorbells", { count: group.doorbells.length }));
+  // A refrigerator says so only when its door is open.
+  if (group.refrigerators?.some((fridge) => fridge.door_open === true)) parts.push(t("rooms.fridgeDoorOpen"));
   if (group.music.some((item) => item.state === "playing")) parts.push(t("rooms.musicPlaying"));
   return parts.join(" · ");
 }
@@ -408,6 +415,7 @@ function roomCard({ room, group }) {
     group.cameras.length ? h("span", { class: "badge" }, icon("camera")) : null,
     group.relays.length ? h("span", { class: "badge" }, icon("door")) : null,
     group.doorbells.length ? h("span", { class: `badge ${group.doorbells.some((doorbell) => ringIsActive(doorbell)) ? "badge-ring" : ""}` }, icon("bell")) : null,
+    group.refrigerators?.length ? h("span", { class: `badge ${group.refrigerators.some((fridge) => fridge.door_open === true) ? "badge-ring" : ""}` }, icon("fridge")) : null,
     group.music.length ? h("span", { class: `badge ${group.music.some((item) => item.state === "playing") ? "badge-on" : ""}` }, icon("music")) : null,
   ];
   return h(
@@ -531,6 +539,7 @@ export function favoritesPicker() {
     ["blinds", "blind", "blinds"],
     ["relays", "relay", "door"],
     ["doorbells", "doorbell", "bell"],
+    ["refrigerators", "refrigerator", "fridge"],
     ["cameras", "camera", "camera"],
   ];
   const lists = {
@@ -540,6 +549,7 @@ export function favoritesPicker() {
     blind: state.blinds,
     relay: state.relays,
     doorbell: state.doorbells,
+    refrigerator: state.refrigerators,
     camera: state.cameras,
   };
   return groups

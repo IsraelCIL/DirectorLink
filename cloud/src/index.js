@@ -13,15 +13,21 @@
 //   POST /auth/apple/notifications     Apple's notifications about its accounts (apple-notifications.js)
 //   /v1/homes/..., /v1/join            homes, members, invitations, sealed requests (homes.js)
 //   /v1/homes/{home_id}/backups        the home's automatic backups, sealed (backups.js)
+//   GET /v1/stats                      DirectorLink in numbers: totals only, public (stats.js)
+//   /v1/homes/{home_id}/device-requests  a new device joins by approval (device-requests.js)
+//   GET, POST /run/{home_id}.{link_id} a scene's link, from a phone's automation (scene-links.js)
 //
 // Errors are Problem Details (application/problem+json) with a stable `code`.
 
 import { handleAccounts, purgeAccountsWithoutSignIn } from "./accounts.js";
 import { handleAppleNotification } from "./apple-notifications.js";
 import { purgeBackupUploads } from "./backups.js";
+import { purgeDeviceRequests } from "./device-requests.js";
 import { handleHomes } from "./homes.js";
+import { handleSceneLink } from "./scene-links.js";
 import { HomeRelay } from "./home-relay.js";
 import { purgeInvitations } from "./invitations.js";
+import { STATS_CRON, countStats, handleStats } from "./stats.js";
 import { bearerToken, json, methodNotAllowed, problem, sameSecret } from "./http.js";
 
 export { HomeRelay };
@@ -31,12 +37,17 @@ const HOME_SECRET = /^[0-9a-f]{64}$/i;
 const TEST_ROUTE = /^\/test\/homes\/([^/]*)(\/status|\/v1(?:\/.*)?)$/;
 
 export default {
-  // Daily housekeeping (wrangler.jsonc → triggers).
+  // Daily housekeeping, and hourly DirectorLink in numbers (wrangler.jsonc → triggers).
   async scheduled(event, env, ctx) {
+    if (event.cron === STATS_CRON) {
+      ctx.waitUntil(countStats(env));
+      return;
+    }
     ctx.waitUntil(purgeInvitations(env));
     ctx.waitUntil(purgeSessions(env));
     ctx.waitUntil(purgeAccountsWithoutSignIn(env));
     ctx.waitUntil(purgeBackupUploads(env));
+    ctx.waitUntil(purgeDeviceRequests(env));
   },
 
   async fetch(request, env) {
@@ -44,6 +55,9 @@ export default {
     try {
       if (url.pathname === "/health") {
         return request.method === "GET" ? json({ status: "ok" }) : methodNotAllowed();
+      }
+      if (url.pathname === "/v1/stats") {
+        return await handleStats(request, env);
       }
       if (url.pathname === "/relay/connect") {
         return await connect(request, env);
@@ -54,6 +68,10 @@ export default {
       }
       if (url.pathname === "/auth/apple/notifications") {
         return await handleAppleNotification(request, env);
+      }
+      const link = await handleSceneLink(request, env);
+      if (link) {
+        return link;
       }
       const account = await handleAccounts(request, env);
       if (account) {

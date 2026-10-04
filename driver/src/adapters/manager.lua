@@ -1,3 +1,4 @@
+local Clock = require("src.core.clock")
 local Log = require("src.core.log")
 local LightV2 = require("src.adapters.light_v2")
 local LightV1 = require("src.adapters.light_v1")
@@ -9,6 +10,7 @@ local Camera = require("src.adapters.camera")
 local KnxRelay = require("src.adapters.knx_relay")
 local DoorBird = require("src.adapters.doorbird")
 local Alarm = require("src.adapters.alarm")
+local Refrigerator = require("src.adapters.refrigerator")
 
 local Manager = {}
 
@@ -23,13 +25,20 @@ local adapters = {
     KnxRelay,
     DoorBird,
     Alarm,
+    Refrigerator,
 }
 
 local attached = {}
--- Device whose events belong to another device (a DoorBird driver's events -> its doorbell).
+-- Told of each device event an adapter took (alerts: a doorbell's ring, a door opened elsewhere).
+local eventListener = nil
+-- When DirectorLink last sent each device a command that worked (Clock.now()): what the device
+-- reports soon after is that command's doing.
+local commanded = {}
+-- Device whose events (and variables) belong to another device: a DoorBird driver's events -> its
+-- doorbell, a Samsung Refrigerator driver's variables and events -> its refrigerator.
 local eventTargets = {}
 local registry = nil
-local initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0 }
+local initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0, refrigerator = 0 }
 
 local function log(message)
     Log.info("adapters", tostring(message))
@@ -80,7 +89,7 @@ function Manager.initialize(deviceRegistry, previous)
     registry = deviceRegistry
     attached = {}
     eventTargets = {}
-    initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0 }
+    initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0, refrigerator = 0 }
     local refreshing = previous ~= nil and next(previous) ~= nil
 
     pcall(function()
@@ -157,11 +166,13 @@ function Manager.counts()
         relay = initializedCounts.relay,
         doorbell = initializedCounts.doorbell,
         alarm = initializedCounts.alarm,
+        refrigerator = initializedCounts.refrigerator,
     }
 end
 
 function Manager.onVariableChanged(deviceId, variableId, value)
     deviceId = tonumber(deviceId)
+    deviceId = eventTargets[deviceId] or deviceId
     local adapter = attached[deviceId]
     if not adapter or not registry then
         return false
@@ -192,12 +203,34 @@ function Manager.onDeviceEvent(deviceId, eventId)
     if not device then
         return false
     end
+    -- The state as it was, for the listener (a relay closing from open is a door opened).
+    local before = {}
+    for key, value in pairs(type(device.state) == "table" and device.state or {}) do
+        before[key] = value
+    end
     local ok, changed = pcall(adapter.onDeviceEvent, device, eventId)
     if not ok then
         log("event handling failed for device " .. tostring(deviceId) .. ": " .. tostring(changed))
         return false
     end
+    if changed == true and eventListener then
+        local told, err = pcall(eventListener, device, eventId, before)
+        if not told then
+            log("event listener failed for device " .. tostring(deviceId) .. ": " .. tostring(err))
+        end
+    end
     return changed == true
+end
+
+-- `listener(device, eventId, before)` is told of each event an adapter took, after it did (`before`:
+-- a copy of the device's state before).
+function Manager.onEvent(listener)
+    eventListener = listener
+end
+
+-- When DirectorLink last sent `deviceId` a command that worked (Clock.now()), or nil.
+function Manager.commandedAt(deviceId)
+    return commanded[tonumber(deviceId)]
 end
 
 function Manager.execute(deviceId, action, params)
@@ -237,6 +270,7 @@ function Manager.execute(deviceId, action, params)
         return false, result
     end
 
+    commanded[deviceId] = Clock.now()
     return true, result
 end
 
@@ -277,7 +311,7 @@ function Manager.shutdown()
     attached = {}
     eventTargets = {}
     registry = nil
-    initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0 }
+    initializedCounts = { total = 0, light = 0, climate = 0, fan = 0, blind = 0, camera = 0, relay = 0, doorbell = 0, alarm = 0, refrigerator = 0 }
 
     for _, adapter in ipairs(adapters) do
         if adapter.reset then

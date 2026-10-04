@@ -294,7 +294,7 @@ function tests.system_reports_controller_location_and_inventory()
     T.eq(system.location.country_code, "IL")
     T.eq(system.location.latitude, 32.08)
     T.eq(system.location.timezone, "Asia/Jerusalem")
-    T.same(system.inventory, { rooms = 2, devices = 14, supported_devices = 11, lights = 3, thermostats = 1, fans = 0, blinds = 2, cameras = 3, relays = 1, doorbells = 1 })
+    T.same(system.inventory, { rooms = 2, devices = 14, supported_devices = 11, lights = 3, thermostats = 1, fans = 0, blinds = 2, cameras = 3, relays = 1, doorbells = 1, refrigerators = 0 })
     T.eq(system.lifecycle.reload_count, 1)
     T.eq(system.lifecycle.last_init_type, "DIT_STARTUP")
 end

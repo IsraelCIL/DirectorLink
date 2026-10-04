@@ -5,8 +5,9 @@ the app's requests on the home network too, pairs with a key exchange, and lets 
 register its own invitations (ADR-032). 1.3.0 switches Sign in with Apple on, lets the home's owner
 approve an invitation accepted with another email, and follows Apple's notifications about its
 accounts (ADR-041); it also pairs with CPace, so the pairing code never crosses the network
-(ADR-039), and the API console's own key lasts a day (ADR-040).** The driver's side is
-`driver/src/cloud/` (`lock.lua`, `remote.lua`) and
+(ADR-039), and the API console's own key lasts a day (ADR-040). 1.7.0 lets a new device join by
+approval from another device of the same account, and paste an invitation link (ADR-053).** The
+driver's side is `driver/src/cloud/` (`lock.lua`, `remote.lua`) and
 `driver/src/auth/invitations.lua`, the cloud's `cloud/src/accounts.js` and `cloud/src/homes.js`, the
 app's `app/js/lock.js`, `app/js/remote.js` and Settings → Account. The relay protocol is
 `docs/RELAY.md`, version 1. Known issues are listed at the end.
@@ -23,8 +24,8 @@ app's `app/js/lock.js`, `app/js/remote.js` and Settings → Account. The relay p
 - Roles stay those of API keys (`viewer`, `member`, `doors`, `admin`), enforced by the controller.
 - Using the app on the home network without an account keeps working.
 
-Not part of this design: local HTTPS, native apps, billing. Alerts to the home's admins (1.6.0,
-ADR-047) are in *6. Alerts* below.
+Not part of this design: local HTTPS, native apps, billing. Alerts (1.6.0, ADR-047; sealed to each
+device's key since 1.7.0, ADR-050) are in *6. Alerts* below.
 
 ## Who knows what
 
@@ -33,18 +34,37 @@ ADR-047) are in *6. Alerts* below.
 | Account: email, name, sign-in provider | yes | yes | no |
 | Which homes the account belongs to | yes | yes | — |
 | Which key ids are admin keys (1.6.0) | its own role | yes (ids only) | yes |
-| Alerts (1.6.0): this browser's push subscription | its own | its push address and keys, for admins who switched alerts on | no |
-| Alerts (1.6.0): what an alert says | its kind, home id and time | its kind, home id and time; which schedule failed **never** | yes |
+| Alerts: this browser's push subscription | its own | its push address and keys, for those who switched alerts on; since 1.7.0 also the key id its device uses, and whether it wants the offline alert | that this key's device switched them on, and its choices (1.7.0) |
+| Alerts: the home was offline (the cloud's own) | its kind, home id and time | its kind, home id and time | — |
+| Alerts the controller makes (1.7.0): a doorbell rang, a door opened and by whom, the refrigerator, a schedule | what happened and where, opened with its own alert key | **never** what or which: only which key ids one is for, when, and whether it is brief, all the same size; that tells some kinds (*Metadata* below): a brief one is a ring, one that is not brief for a key that is not an admin key is the refrigerator | yes |
+| A device's alert key (1.7.0) | its own, kept for its service worker | **never** | derived from that device's lock key |
 | API key and lock key | its own | **never** | lock keys of the home's devices; API keys only as hashes |
 | Devices, rooms, states, commands, pictures | yes | **never** (locked) | yes |
 | Automatic backups (1.6.0) | opened with the backup password | sealed: their date, size and which password's key; **never** what they hold | makes them; cannot open them |
 | The backup password | while typed | **never** | **never** (only its public key) |
+| DirectorLink in numbers (1.7.0): homes linked, people with an account, driver downloads | the totals, like anyone | counts them once an hour; publishes the totals only (ADR-052) | sends nothing for them |
+| Joining from another device (1.7.0): the new device's label ("Safari on iPhone"), both devices' public keys | yes | yes, while the request lasts (10 minutes; deleted within a day) | no |
+| Joining from another device (1.7.0): the invitation sent to the new device | yes (the two devices) | sealed: **never** what it holds | made it; sees an ordinary for-me invitation |
+| Scene links (1.7.0): a link's id and secret | shown once, when an admin makes it; then only on the phones and tags it was given to | **its id and secret in transit, each time a phone uses it**, with the home, when, and whether it ran, partly ran, failed or found nothing to run; it keeps no secret, and logs each run (the home, the link's id, the status, the result word, how long) in Workers Logs for some days; which scene it runs, **never** | the link's id, a hash of its secret, its scene and the key that made it; every run in History |
 | When, and how much data, flows | yes | yes | yes |
 
 A stolen or hacked cloud database gives an attacker email addresses and which account belongs to
-which home (and, with alerts, admins' push addresses). It cannot open a door, read a light's state
-or show a picture, and the backups it holds open only with their backup password, which only the
-family knows.
+which home (and, with alerts, the push addresses of the browsers that switched them on: admins'
+before 1.7.0, any role's since). It cannot open a door, read a light's state or show a picture, and
+the backups it holds open only with their backup password, which only the family knows.
+
+**Scene links (1.7.0, ADR-051) are the one thing that is not sealed.** A phone's automation (iPhone
+Shortcuts, an Android app, an NFC tag) cannot seal a request, so it sends a link's secret in the
+clear to the account service, over HTTPS, which passes it to the home. So: whoever holds a link can
+run that one scene, from anywhere, until an admin removes or replaces it or the key that made it is
+revoked; and the account service sees the link and its secret in transit each time it is used (not
+which scene: it has no names). It keeps no secret (no table, never in its logs: the secret is in the
+request's body, not its address), but it logs each run: the home, the link's id, the status, the
+result word and how long it took, in Workers Logs, which Cloudflare keeps for some days (3 on
+Workers Free, 7 on Paid), beside its own line for the request with the phone's IP address. Someone
+who could read the account service's traffic could run the linked scenes they saw; a scene that
+opens doors or gates can never have a link, so that is at most lights, AC, fans, blinds, music and
+refrigerator settings. Everything else stays sealed. Homes without links are as before.
 
 ## Keys
 
@@ -252,10 +272,60 @@ People and devices and can remove it). An invitation takes at most 5 open reques
 approved; a refused one still stops its own account) and a home 20 waiting ones on invitations
 that can still be accepted; a request goes with its invitation, its account or a change of owner.
 
+### Join from another device (1.7.0, ADR-053)
+
+iOS gives the app added to the Home Screen its own storage (it signs in again there, and has no key)
+and opens every link in Safari, so the link of *my other device* never reaches it. Any device signed
+in to the account, with no key for one of the account's homes, can instead ask a device it already
+uses to let it in, without a link:
+
+1. On the Connect screen, **Join from another device**. The new device makes an X25519 key pair and
+   sends the cloud a request for that home with its label (its browser's own description, e.g.
+   *Home Screen app on iPhone*) and a **commitment**: the SHA-256 of its public key, not the key.
+   The app says to open DirectorLink on a device already in use.
+2. A device of the same account that reaches the home with an admin key (the rule of *Add my other
+   device*, once the controller has said the key's role) shows the request under the header of every
+   screen while the app is open; it looks every 60 seconds, at once when it comes to the front or
+   connects, and every 2 seconds while it answers a request. **Show code** sends that device's own
+   public key. Only then does the new device send its public key, which the cloud and the other
+   device check against the commitment.
+3. Both devices work out the same six digits from the request and both public keys. The new device
+   shows them; the device already in use asks the person to type them, and approves only when they
+   are its own (it never shows them itself, so Approve cannot be tapped without the new device in
+   sight). A wrong code approves nothing; the third declines the request. Because the new device's
+   key was fixed (committed) before the other key was known, and the other key before the new one
+   was shown, nobody passing the keys on (the cloud included) can choose keys that make two
+   different conversations have the same code: a key put in the middle gives each its own code.
+4. **Approve** makes a for-me invitation at the controller exactly as *Add my other device* does (10
+   minutes, the device's role and person, registered by the controller) and seals it to the new
+   device's key: X25519, HKDF-SHA-256 bound to the request, the home and both keys, AES-256-GCM.
+   The cloud passes the sealed value on, once, and cannot open it. The invitation is revoked at
+   home if the cloud refuses Approve; if no answer comes, the device reads the request first and
+   keeps the invitation when the cloud took it.
+5. The new device opens it and joins with it as with the link (*3. Invitations*, steps 4 and 5). A
+   device that got a key another way meanwhile (it paired at home, or opened an invitation's link)
+   withdraws its request when it connects, and is asked before a key it has is replaced.
+
+Only the account's own sessions see, answer, approve, collect or decline its requests. Asking needs
+an account that could approve (it uses an admin key at the home, as far as the controller names its
+admins); answering and approving need an account that uses a key there (`member_keys`). A request
+lasts 10 minutes; it goes once collected, declined or withdrawn, when it is read after it expired,
+at the daily clean-up, when the account leaves the home, and when it signs out everywhere. An
+account has at most 3 requests open and starts at most 10 an hour. Someone holding the account's
+session could ask too, under any label: the account's devices would show a request nobody made
+("Didn't ask? Decline it and sign out everywhere in Settings → Account."), and approving it would
+take the code on the asker's own screen, which the person does not see.
+
+**Paste invitation link** (the Connect screen, and Settings → Account) brings a link that opened
+elsewhere into the Home Screen app: it reads the clipboard (iOS shows its Paste button) or, where
+that is refused or holds no link, takes it in a field; a whole link, a message with one in it, or
+only the part after `#/join/`. The secret still never reaches a server.
+
 ### 4. Removing someone, or a lost phone
 
 An admin revokes that device's key: in the app (Settings → **People and devices**),
-the API console, or Composer's Revoke All API Keys. It stops working at home and away at once.
+the API console, or Composer's Revoke All API Keys. It stops working at home and away at once, and
+so do the scene links made with it (1.7.0; Revoke All API Keys ends every link).
 Signing in to the account alone gives no access, because the keys live only on the devices.
 Settings → Account → **Sign out everywhere** also ends every session of the account, on every
 device (`POST /auth/logout?everywhere=1`).
@@ -278,35 +348,63 @@ membership.
 Pair with a code (CPace: the code is never sent) and use the LAN API; the app seals its requests
 there too (*On the home network*). No cloud is involved.
 
-### 6. Alerts (1.6.0, ADR-047)
+### 6. Alerts (1.6.0, ADR-047; 1.7.0, ADR-050)
 
-The home's admins can get a notification on their phones and computers, with the app closed, for
-two things only: the home has been unreachable for 10 minutes, or a schedule had a problem.
+Anyone with a key at the home can get notifications on their phones and computers, with the app
+closed: a doorbell rang, a door or gate was opened (admins, if they choose), the refrigerator's
+door was left open (members and admins), a schedule had a problem (admins), and the home has been
+unreachable for 10 minutes (admins). Before 1.7.0 on the controller, only the last two, for admins.
 
-1. On Settings → Controller, an admin signed in to an account, on a device linked to the home,
+1. On Settings → Controller, someone signed in to an account, on a device linked to the home,
    switches on **Alerts on this device**. The browser asks for permission and makes a push
-   subscription with the cloud's public key (VAPID); the app registers it
-   (`POST /v1/homes/{home_id}/alerts`). On iPhone and iPad only the app added to the Home Screen
-   can (iOS 16.4 or later).
-2. The cloud takes it only from an account that uses one of the home's admin keys. Which keys are
-   admin keys the controller says with its key ids (`{"type":"keys","ids":[…],"admins":[…]}`,
-   `docs/RELAY.md`); which account uses which key the cloud already knows. The same check is made
-   for every alert, so a key made a member or revoked stops its account's alerts at once.
-3. *Offline*: the home's Durable Object alerts once the driver has been away for 10 minutes, or
-   silent on a socket that never closed, once per absence. *Schedule failed*: the controller sends
-   `{"type":"alert","kind":"schedule_failed","at":…}` when a scheduled scene had a device refuse or
-   could not run, without saying which; at most three an hour reach the admins.
-4. An alert is encrypted for each browser (RFC 8291) and carries only `{kind, home, at}`, padded
-   so that every alert is the same size. The push service (Google, Mozilla, Apple or Microsoft) sees
-   that an alert went to the browser and when, not which alert nor what it says. The app's service
-   worker shows it with the app's own words in its language ("Your home – a schedule had a problem
-   at 08:00. Open the app to see what happened."): the cloud knows no names, not even the home's.
-   Tapping it opens Settings → Controller → History.
+   subscription with the cloud's public key (VAPID); the app registers it with its device's key id
+   (`POST /v1/homes/{home_id}/alerts`) and tells the controller (`PUT /v1/alerts/choices`, sealed).
+   A switch per kind follows; the controller keeps them, per key. On iPhone and iPad only the app
+   added to the Home Screen can (iOS 16.4 or later).
+2. The cloud takes a registration with a key id only from an account that uses that key at the home
+   (`member_keys`). One without (an app before 1.7.0) only from an account that uses one of the
+   home's admin keys, which the controller lists (`{"type":"keys","ids":[…],"admins":[…]}`,
+   `docs/RELAY.md`). The same checks are made for every alert, so a key revoked, or made a member,
+   stops what it may no longer get at once.
+3. *What the controller alerts about* it decides and seals: for each key whose role may get it,
+   whose device switched alerts on and which chose it, the details sealed with that key's alert key
+   (`HMAC-SHA256(lock key, "DirectorLink alert v1")`), in one `{"type":"notify"}` that names only the
+   key ids (`docs/RELAY.md`). The cloud pushes each part, at once, to the browsers registered with
+   that key id by an account that uses it, and to nobody else; it learns which keys and when, never
+   what (every detail is padded to one size before it is sealed; *Metadata* below says what the
+   keys tell). *Offline*: the home's Durable Object alerts once the driver has been away for 10
+   minutes, or silent on a socket that never closed, once per absence, to admin keys' browsers that
+   want it and to the admins' browsers registered before 1.7.0.
+4. A push is encrypted for each browser (RFC 8291), padded so that every push is the same size. The
+   push service (Google, Mozilla, Apple or Microsoft) sees that something went to the browser, when,
+   and how long it may keep it (a ring a minute), not what. The app's service worker opens a sealed
+   alert with this device's alert key, which the app keeps for it (never the lock key or the API
+   key), and shows it with the app's own words in its language ("Front gate rang at 08:00.", "Main
+   door was opened by Dana (Dana's iPhone) at 08:01."); the cloud's offline alert, and anything it
+   cannot open, in general words ("Your home – …"): the home's name is never sent. Tapping a ring
+   opens Home, a refrigerator's alert its room, the others Settings → Controller → History.
 
 Turning the switch off, signing out or forgetting the key on that device, signing out everywhere
-(or Apple ending the account's only sign-in), leaving the home or being removed, another account
-claiming the home, and deleting the account all end that browser's alerts; the home then stops
-watching for them once no admin's browser is left.
+(or Apple ending the account's only sign-in), leaving the home or being removed, the key being
+revoked, another account claiming the home, and deleting the account all end that browser's
+alerts; the home then stops watching for the offline alert once no admin's browser wants it.
+
+### 7. Scene links (1.7.0, ADR-051)
+
+An admin makes a link for a scene (docs/SCENES.md); the controller shows its secret once and keeps
+a hash of it. A phone's automation posts the secret to `https://api.directorlink.io/run/<home_id>.<link_id>`
+(in the body, never in the address; a browser gets it after `#` and posts it from the page). The
+account service checks that an account has claimed the home, lets at most 30 runs a minute reach
+it (and none from an address whose runs were refused as unknown 10 times in 10 minutes), and passes
+the link's id and secret over the relay (`link`, docs/RELAY.md). The controller checks the hash in
+constant time, runs the scene as a member's key would and records the run in History; the phone gets
+`ran`, `partly`, `failed` or `nothing`, and an unknown home, link or secret all get the same 404 (but
+a claimed home that is offline gets 503, so that the family knows: whoever has the home's id, which
+every link and invitation link carries, can tell whether it is online). No account and no session is
+involved: the link is the permission. Removing or replacing the link ends it at once; so do revoking
+the key that made it (or its expiry), and Composer's Remove All Scene Links, Revoke All API Keys and
+Reset Remote Identity. Another account claiming the home does not: its new owner should run Revoke
+All API Keys, which ends every link the old family had.
 
 ## Google and Apple
 
@@ -387,6 +485,12 @@ Cloudflare D1 (SQLite), next to the relay's Durable Objects:
   cannot be registered again for another email.
 - `join_requests`: home, invitation id, the account asking, its code, pending, approved or refused,
   when (`migrations/0005`). They go with their invitation, their account or a change of owner.
+- `device_requests` (1.7.0, ADR-053, `migrations/0009`): a new device's request to join a home of
+  its account, usable for 10 minutes: its label, the commitment and its public key, the approving
+  device's public key, the invitation sealed to it (which the cloud cannot open), when. They go
+  once collected or declined, when read after they expired or at the daily clean-up, with the
+  membership, and when the account signs out everywhere. `device_request_starts` counts each
+  account's requests of the hour.
 - `backups`, `backup_chunks` (1.6.0, ADR-048, `migrations/0007`): each home's automatic backups as
   the controller sealed them to the backup password's public key: the ciphertext in chunks, its
   size, when it came, and which password's key (the public key's first 8 bytes). Not the home's
@@ -394,10 +498,12 @@ Cloudflare D1 (SQLite), next to the relay's Durable Objects:
   most 5 MB a home and 25 MB an owner's homes; they go with the home (its owner's account deleted),
   when an admin deletes them, and an upload that never finished after an hour (daily cron).
 - `push_subscriptions` (1.6.0): home, the browser's push address, its public key and secret, the
-  account that registered it, when (`migrations/0006`). They go with the membership, the account,
-  signing out everywhere (also Apple ending the account's only sign-in), or the push service saying
-  the browser is gone. The home's Durable Object keeps the admin key ids the controller last
-  listed.
+  account that registered it, when (`migrations/0006`); since 1.7.0 the key id its device uses at
+  the home and whether it wants the offline alert (`migrations/0008`). They go with the membership,
+  the account, the key, signing out everywhere (also Apple ending the account's only sign-in), or
+  the push service saying the browser is gone. The home's Durable Object keeps the admin key ids
+  the controller last listed, and when it last notified (60 an hour at most).
+- `stats` (1.7.0, ADR-052, `migrations/0010`): three totals and when each was last counted (below).
 - No device data, no keys and no message contents. The hash of each home's connection secret is
   in the relay's Durable Object storage.
 
@@ -406,6 +512,25 @@ After sign-in the cloud sets a `Secure`, `HttpOnly`, `SameSite=Strict` cookie fo
 app, on this device or on every device. Expired sessions and unfinished sign-ins are deleted every
 day. Deleting the account deletes its sessions, memberships, owned homes, invitations and requests
 to join.
+
+### What is public: DirectorLink in numbers (1.7.0, ADR-052)
+
+Once an hour the cloud counts three totals, and anyone may read them at
+`GET https://api.directorlink.io/v1/stats` (no cookie; the website shows them from 25 homes):
+
+- **homes**: homes linked to an account (claimed, their owner's account still there); a home stays
+  counted until its owner's account is deleted, also once it is no longer used (a reset identity, a
+  replaced or test controller): the cloud keeps no time a home was last seen;
+- **people**: accounts someone can sign in to (deleted accounts are gone; one Apple's notices left
+  without a sign-in is not counted);
+- **downloads**: how often `DirectorLink.c4z` was downloaded, all GitHub releases together, from
+  GitHub's public releases list.
+
+Totals only, with when the oldest of them was counted: nothing about any one home or account, and
+nothing new from the homes (no device counts, no versions). As they change at most once an hour,
+nobody can watch a home or an account appear; with few homes, a total that changed between two hours
+says only that some home was linked or left, or some account was made or deleted, in that hour.
+The website asks for them from the visitor's browser, without cookies.
 
 ## Relay protocol, version 1
 
@@ -451,16 +576,30 @@ device's key.
   internet with a certificate one of those authorities issued for any other name could pose as the
   relay, take the home secret from the connection and keep the home offline; sealed requests stay
   unreadable to them.
+- **Scene links** (1.7.0, ADR-051): not sealed. Whoever holds one runs its scene; the account
+  service, and Cloudflare beneath it, see its secret when a phone uses it. Never a scene with doors
+  or gates; remove or replace a link that may have leaked.
 - **Metadata:** which account uses which home, when, and how much. With alerts (1.6.0), also when
-  a home was offline or a schedule failed, and which key ids are admin keys. An alert's words are
-  the app's, never the cloud's: whoever could send pushes in DirectorLink's name could only choose
-  among its own sentences and a time.
+  a home was offline, and which key ids are admin keys. Since 1.7.0, when the home notified which
+  key ids, and whether the notice was brief; every sealed part has the same size, and none names
+  anything the cloud can read. The keys and the brevity tell some kinds for certain: a brief notice
+  is a doorbell's ring (only rings are brief); one that is not brief and reaches a key that is not
+  an admin key is the refrigerator's door left open (doors opened and schedules that failed go to
+  admin keys only); one for admin keys only is a door or gate opened, a schedule that failed or the
+  refrigerator. Never which doorbell, door or refrigerator, who opened it, or which schedule.
+  With requests from new devices (1.7.0), also the kind of device and browser that asked, and
+  when. With scene links (1.7.0), when a home's linked scenes run and whether they ran. An alert's
+  words are the app's, never the cloud's: whoever could send pushes in DirectorLink's name could
+  only choose among its own sentences and a time, and could not seal a detail a device would open;
+  the cloud could send a sealed alert again to the same device, which shows its own time.
 
 ## iPhone and iPad
 
 They cannot use the home-network connection: WebKit blocks it (see the README). With this design
 they always go through the cloud, locked, even at home. The owner still has to claim the home once
-from a computer or an Android phone; the owner's iPhone then joins as *my other device*.
+from a computer or an Android phone; the owner's iPhone then joins as *my other device*, or (1.7.0)
+with **Join from another device**, which the Home Screen app needs: it gets no links (*Join from
+another device*, above).
 
 ## Phases
 
@@ -526,3 +665,16 @@ and the notification endpoint `https://api.directorlink.io/auth/apple/notificati
 12. (1.6.0, ADR-047) Admins may get Web Push alerts (home offline 10 minutes, a schedule failed),
     encrypted for their browsers and naming nothing; the controller tells the cloud which key ids
     are admin keys.
+13. (1.7.0, ADR-050) What the controller alerts about (doorbells, doors opened, the refrigerator,
+    schedules) it seals to each key that gets it, and each key chooses; the cloud delivers each part
+    to that key's browsers only, knowing which keys and when, not what (though a brief one is a
+    ring, and one for a key that is not an admin key that is not brief is the refrigerator).
+14. (1.7.0, ADR-051) A scene may have a private link for the phone's own automations: its secret
+    passes the account service in the clear when used (never which scene), the controller keeps
+    its hash, and a scene that opens doors or gates never has one.
+15. (1.7.0, ADR-052) Three totals are public, counted once an hour: homes linked to an account,
+    people with an account, driver downloads. Nothing about any one home; the homes send nothing
+    for them.
+16. (1.7.0, ADR-053) A new device of the account joins by approval from a device that reaches the
+    home with an admin key, after both show the same code; the new device commits to its key first,
+    and the invitation reaches it sealed. Paste invitation link brings a link into the Home Screen app.

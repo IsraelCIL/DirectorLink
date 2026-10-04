@@ -385,6 +385,73 @@ function Mock.withFans(project)
     return project
 end
 
+-- The Samsung Refrigerator (DirectorLink) driver (1.7.0, ADR-049): the driver with five uibutton
+-- proxies (the status tile first, then Power Cool, Power Freeze, Sabbath Mode, Ice Maker), and its
+-- variables on the driver itself, numbered from 1001 in the order it adds them.
+Mock.REFRIGERATOR_VARIABLES = {
+    "POWER_COOL", "POWER_FREEZE", "SABBATH_MODE", "ICE_MAKER", "ONLINE", "DOOR_OPEN", "FRIDGE_TEMP",
+    "FREEZER_TEMP", "FRIDGE_SETPOINT", "FREEZER_SETPOINT", "POWER_W", "WATER_FILTER_USAGE",
+}
+
+-- options: protocol (140), id (141, the status tile; the other proxies follow), room (10), name
+-- ("Refrigerator", the status tile's), file (the driver's file name), values (variable name ->
+-- value, over these: online, a 3 °C fridge and a -18 °C freezer, the door closed, the filter 40 %
+-- used, every feature off), reported (the driver's REPORTED_VARIABLES and TEMPERATURE_UNIT, added
+-- after the others: { variables = "POWER_COOL,...", unit = "C" }; without it the driver is 1.0.0,
+-- which has neither).
+function Mock.withRefrigerator(project, options)
+    options = options or {}
+    local protocol, first = options.protocol or 140, options.id or 141
+    local roomId = options.room or 10
+    local roomName = roomId == 10 and "Kitchen" or "Living Room"
+    local file = options.file or "DirectorLink-Samsung-Refrigerator.c4z"
+    local driverName = "Samsung Refrigerator (DirectorLink)"
+    local proxies = {}
+    for index, proxyName in ipairs({ options.name or "Refrigerator", "Power Cool", "Power Freeze", "Sabbath Mode", "Ice Maker" }) do
+        local id = first + index - 1
+        proxies[id] = { deviceName = proxyName, driverFileName = "uibutton.c4i" }
+        project.devices[id] = {
+            deviceName = proxyName, driverFileName = "uibutton.c4i", roomId = roomId, roomName = roomName,
+            protocol = { [protocol] = { deviceName = driverName, driverFileName = file } },
+        }
+    end
+    project.devices[protocol] = { deviceName = driverName, driverFileName = file, roomId = roomId, roomName = roomName, proxies = proxies }
+    local values = {
+        POWER_COOL = "0", POWER_FREEZE = "0", SABBATH_MODE = "0", ICE_MAKER = "0", ONLINE = "1", DOOR_OPEN = "0",
+        FRIDGE_TEMP = "3", FREEZER_TEMP = "-18", FRIDGE_SETPOINT = "3", FREEZER_SETPOINT = "-18", POWER_W = "95",
+        WATER_FILTER_USAGE = "40",
+    }
+    local names = {}
+    for _, name in ipairs(Mock.REFRIGERATOR_VARIABLES) do
+        names[#names + 1] = name
+    end
+    if options.reported then
+        names[#names + 1] = "REPORTED_VARIABLES"
+        names[#names + 1] = "TEMPERATURE_UNIT"
+        values.REPORTED_VARIABLES = options.reported.variables or ""
+        values.TEMPERATURE_UNIT = options.reported.unit or ""
+    end
+    for name, value in pairs(options.values or {}) do
+        values[name] = value
+    end
+    project.variables[protocol] = {}
+    project.variableNames[protocol] = {}
+    for index, name in ipairs(names) do
+        project.variables[protocol][1000 + index] = values[name]
+        project.variableNames[protocol][1000 + index] = name
+    end
+    return project
+end
+
+-- The refrigerator's driver reports: variables by name, e.g. { DOOR_OPEN = "1" }.
+function Mock.setRefrigerator(mock, protocol, values)
+    for variableId, name in pairs(mock.project.variableNames[protocol] or {}) do
+        if values[name] ~= nil then
+            Mock.changeVariable(mock, protocol, variableId, values[name])
+        end
+    end
+end
+
 -- Security partitions (security.c4i, 1.2.0) with the variables bkwagner read on a live Director
 -- (#15). Variable 1004, which DirectorLink does not read, holds a text that must never reach the API.
 Mock.PARTITION_VARIABLES = {
@@ -442,13 +509,15 @@ function Mock.setPartition(mock, id, values)
 end
 
 -- The project the dev server and the app preview show: the default one plus every family added
--- since (1.1.0, and the fans and the alarm's partitions of 1.2.0).
+-- since (1.1.0, the fans and the alarm's partitions of 1.2.0, and a Samsung refrigerator of 1.7.0
+-- with its driver's 1.0.0 variables).
 function Mock.demoProject()
     local project = Mock.withShades(Mock.withLegacyLights(Mock.project()))
     Mock.withDualThermostat(project, { id = 31, protocol = 112, room = 10, scale = "FAHRENHEIT" })
     Mock.withHeatOnlyZone(project, { id = 32, protocol = 113, room = 11, name = "Bathroom floor", scale = "FAHRENHEIT", heat = "21.5" })
     Mock.withFans(project)
     Mock.withPartitions(project)
+    Mock.withRefrigerator(project)
     return project
 end
 

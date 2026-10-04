@@ -28,6 +28,7 @@ local Schedules = require("src.core.schedules")
 local JewishCalendar = require("src.core.jewish_calendar")
 local Relay = require("src.cloud.relay")
 local SonosRooms = require("src.sonos.rooms")
+local SceneLinks = require("src.core.scene_links")
 
 local Backup = {}
 
@@ -60,11 +61,13 @@ local SECTIONS = {
     remote_identity = { version = 1 },
     -- The Sonos room choices (src/sonos/rooms.lua), from 1.6.0 (ADR-048).
     sonos_rooms = { version = 1, object = "rooms", optional = true },
+    -- The scene links (src/core/scene_links.lua), hashes only, from 1.7.0 (ADR-051).
+    scene_links = { version = SceneLinks.STORE_VERSION, list = "links", optional = true },
 }
 
 -- Scene step types and favorites ("kind:id") name the kinds of the project's devices so.
-local STEP_KINDS = { lights = "light", climate = "climate", fans = "fan", blinds = "blind", relays = "relay" }
-local FAVORITE_KINDS = { light = "light", thermostat = "climate", fan = "fan", blind = "blind", camera = "camera", relay = "relay", doorbell = "doorbell" }
+local STEP_KINDS = { lights = "light", climate = "climate", fans = "fan", blinds = "blind", relays = "relay", refrigerators = "refrigerator" }
+local FAVORITE_KINDS = { light = "light", thermostat = "climate", fan = "fan", blind = "blind", camera = "camera", relay = "relay", doorbell = "doorbell", refrigerator = "refrigerator" }
 -- What opens doors and gates: kept only on the device (or room) with the same id and the same
 -- name, never moved to another one, which would open the wrong door.
 local DOOR_KINDS = { relay = true, doorbell = true }
@@ -255,6 +258,7 @@ function Backup.export(registry)
         calendar = JewishCalendar.backup(),
         remote_identity = Relay.backupIdentity(),
         sonos_rooms = SonosRooms.backup(),
+        scene_links = SceneLinks.backup(),
     }
     return {
         format = Backup.FORMAT,
@@ -1080,6 +1084,8 @@ local READ_AT_START = {
     { name = "calendar", complete = JewishCalendar.complete },
     -- Only written when the backup has them.
     { name = "sonos_rooms", complete = SonosRooms.complete, optional = true },
+    -- Always written: from a backup without them, the links here that still apply.
+    { name = "scene_links", complete = SceneLinks.complete },
 }
 
 -- Checks `document` against this controller and works out everything a restore writes, without
@@ -1181,6 +1187,33 @@ function Backup.plan(document, context)
     local from = origin(document, { controller = context.controller, homeName = homeName(context.registry) }, m, current)
     local identity, action = chooseIdentity(sections.remote_identity, current, from, context.move_remote == true, now)
 
+    -- Scene links (1.7.0, ADR-051) follow the keys' rule: the backup's only when its keys come back
+    -- (the driver added again, or the controller replaced), else the ones here, so that a link
+    -- removed or replaced since the backup was made never comes back. Each only while its scene
+    -- comes back without doors or gates, the link names the home whose identity is in use after the
+    -- restore (its address names that home) and the key that made it is among the keys after it
+    -- (one this device replaces passes its links to this device's). Hashes only, like keys.
+    local restoredScenes = {}
+    for _, scene in ipairs(matchedScenes) do
+        restoredScenes[scene.id] = scene
+    end
+    local keyIds = {}
+    for _, key in ipairs(keys) do
+        keyIds[key.id] = true
+    end
+    local links = Json.array()
+    local home = identity and identity.linked and identity.home_id or nil
+    local source = keyInfo.action == "restore" and sections.scene_links or SceneLinks.backup()
+    for _, link in ipairs((SceneLinks.read(source))) do
+        local scene = restoredScenes[link.scene_id]
+        if link.by and context.replaces ~= nil and link.by == context.replaces and restorer then
+            link.by = restorer.id
+        end
+        if scene and home and link.home == home and SceneLinks.linkable(scene) and (not link.by or keyIds[link.by]) then
+            links[#links + 1] = link
+        end
+    end
+
     local composer = Json.array()
     local stored = isObject(document.composer) and document.composer or {}
     for _, name in ipairs(Backup.COMPOSER) do
@@ -1213,6 +1246,7 @@ function Backup.plan(document, context)
             room_names = namedRooms,
             room_order = #order,
             sonos_rooms = nullable(sonosCount),
+            scene_links = #links,
         },
         left_out = counts,
         keys = keyInfo,
@@ -1247,6 +1281,7 @@ function Backup.plan(document, context)
             calendar = { version = 1, settings = calendar },
             remote_identity = identity,
             sonos_rooms = sonosRooms and { version = 1, rooms = sonosRooms } or nil,
+            scene_links = { version = SceneLinks.STORE_VERSION, links = links },
         },
     }
 end
@@ -1278,6 +1313,7 @@ local PARTS = {
     },
     -- Only when the backup has them (1.6.0 and later).
     { name = "sonos_rooms", take = SonosRooms.backup, write = SonosRooms.restore, optional = true },
+    { name = "scene_links", take = SceneLinks.backup, write = SceneLinks.restore },
 }
 
 local function write(part, data, now)
@@ -1322,6 +1358,7 @@ function Backup.apply(plan, now)
         scenes = counts.scenes,
         schedules = counts.schedules,
         sonos_rooms = counts.sonos_rooms,
+        scene_links = counts.scene_links,
         remote = plan.preview.remote.action,
         another_home = plan.preview.origin.another_home,
         unmatched = plan.preview.references.unmatched_count,

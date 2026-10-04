@@ -11,16 +11,18 @@ Each entry has when, who, what (by the names the controller had then) and how it
 
 | Kind | Entries | Who |
 | --- | --- | --- |
-| Scenes (`scene`) | A scene run from the app or the API, with how many devices ran, were skipped or failed. Home's Turn off all. | The key (its device, and the person it belongs to) |
+| Scenes (`scene`) | A scene run from the app or the API, with how many devices ran, were skipped or failed. Home's Turn off all. A scene run by its link from a phone's automation (1.7.0, ADR-051). | The key (its device, and the person it belongs to); for a link, the link, by its label |
 | Schedules (`schedule`) | Every run, with the same counts; late runs caught up after a restart. Every skip, with its reason: Shabbat or a holiday, the Jewish calendar off (for a schedule that runs only on Shabbat), its weather conditions not met, no weather data. Paused in Composer: once a schedule for the pause, at its first run skipped (the pause itself is listed under Composer). A run that failed. | The schedule (its time and days) |
-| Doors (`door`) | A door or gate opened (a relay's pulse, also by a scene, which is named), a relay held or released, the door at a doorbell opened. | The key |
+| Doors (`door`) | A door or gate opened (a relay's pulse, also by a scene, which is named), a relay held or released, the door at a doorbell opened. Since 1.7.0 also a door or gate opened without DirectorLink, when the device reports it: a KNX relay that closed after it last reported open (not one that says "closed" again), a DoorBird whose relay was triggered (its own app, a keypad), more than 15 s after DirectorLink's own last command to it, at most one a door a minute (ADR-050). Admins may get an alert for each (Settings → Controller → Alerts on this device). A refrigerator's door left open (`left_open`, 1.7.0, ADR-049): its Samsung Refrigerator driver's Door Left Open, once per opening (after its Door Open Alert, 5 minutes by default, as read at its poll interval: 6 to 8 minutes after the door opened). | The key, or Control4 (“In Control4”); DirectorLink for a refrigerator's door |
 | Changes in Composer (`composer`) | Devices and rooms removed, added, renamed or moved, as a project refresh found them, by name and room; up to 20 a refresh, then how many more. Devices DirectorLink cannot control are listed too (a keypad's button). DirectorLink's own settings changed in Composer: Remote Access, Schedules, Jewish Calendar, Door Control, Relay Hold, Alarm Status, Sonos. | Composer |
-| Access (`access`) | A device paired with a code, a key added, its role changed, a key removed or removing itself, a key that expired, an invitation accepted, all keys revoked in Composer. | The key that did it, or DirectorLink |
+| Access (`access`) | A device paired with a code, a key added, its role changed, a key removed or removing itself, a key that expired, an invitation accepted, all keys revoked in Composer. A scene's link made, replaced or removed (1.7.0), also when it went by itself: the scene now opens doors or gates, or was deleted, or the key that made it was revoked or expired; all of them removed in Composer (or not, when the controller could not save that: they still work), by Revoke All API Keys, or by Reset Remote Identity. | The key that did it, Composer, or DirectorLink |
 | System (`system`) | A backup made, a backup restored (and from when), an automatic backup to the account made, or not and why (Remote Access off, the account not reached, the home not in an account, too large, backed up too often that day, no room left in the account, stopped by turning automatic backups off or changing their password, another error; a night's backup that fails is listed once, saying whether it is tried again that night, and once more if it is made later that night), the remote connection back after more than a minute away (and for how long), DirectorLink updated (from which version to which), started again, added to the project. | The key (Back up now), or DirectorLink |
 
 Not in it: lights, AC and blinds changed one by one (the log has them), reads, a remote connection
-away for a minute or less (the log has every drop), and the changes in Composer made while
-DirectorLink was not running (it compares the project with the one it read last, from its start).
+away for a minute or less (the log has every drop), the changes in Composer made while
+DirectorLink was not running (it compares the project with the one it read last, from its start),
+and a scene link's run that was refused (a wrong secret, too many runs: the log has one line a
+minute, with the link's id).
 
 ## Where it is kept
 

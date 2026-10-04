@@ -40,6 +40,10 @@
         <name>Reset Remote Identity</name>
         <command>RESET_REMOTE_IDENTITY</command>
       </action>
+      <action>
+        <name>Remove All Scene Links</name>
+        <command>REMOVE_SCENE_LINKS</command>
+      </action>
     </actions>
     <properties>
       <property>

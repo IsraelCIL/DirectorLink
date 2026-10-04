@@ -324,6 +324,8 @@ function summary(preview, { result = false } = {}) {
     ["roomOrder", counts.room_order],
     // A backup before 1.6.0 has no Sonos rooms (null): the choices made here stay.
     ...(Number.isInteger(counts.sonos_rooms) ? [["sonosRooms", counts.sonos_rooms]] : []),
+    // Scene links (1.7.0): only from a controller that has them.
+    ...(Number.isInteger(counts.scene_links) ? [["sceneLinks", counts.scene_links]] : []),
   ];
   const back = Array.isArray(keys.items) ? keys.items : [];
   const unmatched = references.unmatched || [];

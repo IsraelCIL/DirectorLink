@@ -439,6 +439,22 @@ def scenario(client, bridge):
     client.check("POST", "/v1/relays/70/pulse", 202)
     client.check("POST", "/v1/relays/99/pulse", 404)
 
+    # A Samsung refrigerator (1.7.0, Mock.withRefrigerator): the driver 140, the refrigerator 141.
+    # The dev bridge's refrigerator confirms a feature 4 seconds later, as through Samsung's cloud.
+    client.check("GET", "/v1/refrigerators", 200)
+    client.check("GET", "/v1/refrigerators?room_id=10", 200)
+    fridge = client.check("GET", "/v1/refrigerators/141", 200)
+    if (fridge["fridge_temperature"], fridge["online"], fridge["features_reported"]) != (3, True, False):
+        fail(f"GET /v1/refrigerators/141 should show the fake refrigerator: {fridge}")
+    client.check("GET", "/v1/refrigerators/142", 404)
+    client.check("GET", "/v1/refrigerators/abc", 400)
+    client.check("PATCH", "/v1/refrigerators/141", 202, body={"sabbath_mode": True, "ice_maker": False})
+    client.check("PATCH", "/v1/refrigerators/141", 400, body={"sabbath_mode": "on"})
+    client.check("PATCH", "/v1/refrigerators/141", 400, body={"door_open": True})
+    client.check("PATCH", "/v1/refrigerators/99", 404, body={"power_cool": True})
+    if bridge.report_variable(140, 1006, "1") != 1 or bridge.fire_event(140, 15) != 1:
+        fail("the refrigerator's door and its driver's Door Left Open should be watched")
+
     client.check("GET", "/v1/doorbells", 200)
     client.check("GET", "/v1/doorbells/93", 200)
     client.check("GET", "/v1/doorbells/92", 404)
@@ -511,6 +527,7 @@ def scenario(client, bridge):
             {"type": "relays", "device_ids": [70], "set": {"action": "pulse"}},
             {"type": "fans", "room_id": 11, "set": {"speed": 1}},
             {"type": "fans", "device_ids": [42], "set": {"on": False}},
+            {"type": "refrigerators", "device_ids": [141], "set": {"sabbath_mode": True}},
         ],
     }
     scene = client.check("POST", "/v1/scenes", 201, body=night)
@@ -529,6 +546,8 @@ def scenario(client, bridge):
     client.check("POST", "/v1/scenes/try", 400, body={"steps": [{"type": "speakers", "set": {}}]})
     client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "fans", "set": {"on": True}}]})
     client.check("POST", "/v1/scenes/try", 400, body={"steps": [{"type": "fans", "set": {"speed": 0}}]})
+    client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "refrigerators", "room_id": 10, "set": {"power_cool": True}}]})
+    client.check("POST", "/v1/scenes/try", 400, body={"steps": [{"type": "refrigerators", "set": {}}]})
     # Home's "Turn off all" (1.3.0): lights, AC or blinds it names, never doors.
     off = client.check("POST", "/v1/off", 202, body={"type": "lights", "device_ids": [20, 22]})
     if (off["ran"], off["failed"], off["skipped"]) != (2, 0, 0):
@@ -609,6 +628,8 @@ def scenario(client, bridge):
     client.check("PATCH", "/v1/lights/20", 403, body={"on": True})
     client.check("GET", "/v1/fans", 200)
     client.check("PATCH", "/v1/fans/41", 403, body={"on": False})
+    client.check("GET", "/v1/refrigerators/141", 200)
+    client.check("PATCH", "/v1/refrigerators/141", 403, body={"sabbath_mode": False})
     client.check("POST", "/v1/relays/70/pulse", 403)
     if client.check("GET", "/v1/alarm", 403)["code"] != "FORBIDDEN":
         fail("a viewer key must not read the alarm")
@@ -638,6 +659,15 @@ def scenario(client, bridge):
     client.check("DELETE", f"/v1/schedules/{timed['id']}", 403)
     client.check("GET", "/v1/calendar", 200)
     client.check("PATCH", "/v1/calendar/settings", 403, body={"havdalah_minutes": 50})
+    # Each key its own alert choices (1.7.0, ADR-050): a viewer may get doorbells only.
+    choices = client.check("GET", "/v1/alerts/choices", 200)
+    if choices != {"on": False, "kinds": {"doorbell": True}}:
+        fail(f"a viewer's alert choices should be off, with the doorbell only: {choices}")
+    choices = client.check("PUT", "/v1/alerts/choices", 200, body={"on": True, "kinds": {"door_opened": True}})
+    if choices != {"on": True, "kinds": {"doorbell": True}}:
+        fail(f"a viewer cannot choose the doors opened: {choices}")
+    client.check("PUT", "/v1/alerts/choices", 400, body={"kinds": {"lights": True}})
+    client.check("PUT", "/v1/alerts/choices", 400, body={})
     client.check("DELETE", "/v1/api-keys/current", 204)
     client.check("GET", "/v1/lights", 401)
     client.key = admin_key
@@ -727,6 +757,8 @@ def scenario(client, bridge):
     kinds = {item["kind"] for item in history["items"]}
     if not {"scene", "door", "access", "composer", "system"} <= kinds:
         fail(f"GET /v1/activity should have scenes, doors, keys, Composer settings and the backup: {sorted(kinds)}")
+    if not any(item["action"] == "left_open" for item in history["items"]):
+        fail("GET /v1/activity should list the refrigerator door left open")
     restored = next((item for item in history["items"] if item["action"] == "restore"), None)
     if not restored or restored["who"]["type"] != "key" or restored.get("from") != document["created_at"]:
         fail(f"GET /v1/activity should say who restored which backup: {restored}")
@@ -746,6 +778,12 @@ def scenario(client, bridge):
     # Automatic backups to the account (1.6.0, ADR-048): the backup password's public key, set and
     # read in sealed requests only; Back up now needs Remote Access, which is off here, and so does
     # the night's backup, which the history then lists as not made.
+    if client.check("GET", "/v1/system", 200)["features"].get("alert_choices") is not True:
+        fail("GET /v1/system should say features.alert_choices true: the app offers alert choices only then")
+    choices = client.check_sealed(bridge, "PUT", "/v1/alerts/choices", 200, body={"on": True, "kinds": {"door_opened": True}})
+    if not choices["on"] or choices["kinds"].get("door_opened") is not True or choices["kinds"].get("schedule_failed") is not True:
+        fail(f"an admin chooses the doors opened, and keeps schedules: {choices}")
+    client.check("GET", "/v1/alerts/choices", 401, auth=False)
     if client.check("GET", "/v1/system", 200)["features"].get("automatic_backup") is not True:
         fail("GET /v1/system should say features.automatic_backup true: the app shows the section only then")
     if client.check("GET", "/v1/backup/automatic", 200)["enabled"] is not False:
@@ -774,6 +812,36 @@ def scenario(client, bridge):
     client.check_sealed(bridge, "DELETE", "/v1/backup/automatic", 204)
     if client.check("POST", "/v1/backup/automatic/run", 409)["code"] != "AUTOMATIC_BACKUP_OFF":
         fail("Back up now with automatic backups off should be AUTOMATIC_BACKUP_OFF")
+
+    # Scene links (ADR-051): admins make one per scene, shown once; never for a scene that opens
+    # doors or gates; only with Remote Access on and the home linked (the dev bridge marks it so).
+    if client.check("GET", "/v1/system", 200)["features"].get("scene_links") is not True:
+        fail("GET /v1/system should say features.scene_links true: the app shows scene links only then")
+    arriving = client.check("POST", "/v1/scenes", 201, body={"name": "Arriving", "steps": [{"type": "lights", "device_ids": [20], "set": {"on": True}}]})
+    link_path = f"/v1/scenes/{arriving['id']}/link"
+    links = client.check("GET", "/v1/scene-links", 200)
+    if links["remote_access"] or links["home_linked"] or links["items"]:
+        fail(f"GET /v1/scene-links should say Remote Access is off and the home not linked, with no links: {links}")
+    if client.check("POST", link_path, 409, body={"label": "Arriving home"})["code"] != "REMOTE_ACCESS_OFF":
+        fail("a scene link with Remote Access off should be REMOTE_ACCESS_OFF")
+    client.check("GET", link_path, 404)
+    client.check("DELETE", link_path, 404)
+    home_id = bridge.link_home()
+    made = client.check("POST", link_path, 201, body={"label": "Arriving home"})
+    if made["url"] != f"https://api.directorlink.io/run/{home_id}.{made['link_id']}#{made['secret']}" or made["replaced"]:
+        fail(f"POST {link_path} should give the link's address with the secret after #: {made}")
+    if client.check("POST", link_path, 201)["replaced"] is not True:
+        fail(f"POST {link_path} again should replace the link")
+    if made["secret"] in json.dumps(client.check("GET", "/v1/scene-links", 200)) or "secret" in client.check("GET", link_path, 200):
+        fail("a scene link's secret is shown only when it is made")
+    client.check("POST", link_path, 400, body={"secret": made["secret"]})
+    gate = client.check("POST", "/v1/scenes", 201, body={"name": "Gate", "steps": [{"type": "relays", "device_ids": [70], "set": {"action": "pulse"}}]})
+    if client.check("POST", f"/v1/scenes/{gate['id']}/link", 409)["code"] != "SCENE_OPENS_DOORS":
+        fail("a scene that opens doors or gates should never get a link")
+    client.check("POST", "/v1/scenes/deadbeef/link", 404)
+    client.check("DELETE", link_path, 204)
+    client.check("GET", "/v1/scene-links", 401, auth=False)
+    bridge.set_property("Remote Access", "Off")
 
     # Sealed requests on the home network: what sealing needs, and refusals (the driver's own tests
     # open real ones). Pairing with a key exchange answers sealed.

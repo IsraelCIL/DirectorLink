@@ -1,12 +1,17 @@
-// Alerts on this device (app/js/alerts.js, app/js/views/alerts.js, ADR-047): who sees the switch in
-// Settings → Controller, what it says on each device, and what turning it on and off does: the
-// permission (asked only here), the browser's push subscription with the account service's key, its
-// registration, the words kept for the service worker in the app's language, and the clean-up when
-// the key is forgotten. Against a fake account service and a fake browser push manager.
+// Alerts on this device (app/js/alerts.js, app/js/views/alerts.js, ADR-047, ADR-050): who sees the
+// switch in Settings → Controller, what it says on each device, and what turning it on and off does:
+// the permission (asked only here), the browser's push subscription with the account service's key,
+// its registration with this device's key id, the controller told (DirectorLink 1.7.0) and each
+// kind chosen there, the words and the alert key kept for the service worker, and the clean-up when
+// the key is forgotten. Against a fake account service, a fake home behind it (sealed requests) and
+// a fake browser push manager.
 //   node --test tests/app/
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+
+import { deriveLock, open, seal } from "../../app/js/lock.js";
 
 const HOME = "0123456789abcdef0123456789abcdef";
 const KEY_ID = "0a1b2c3d";
@@ -119,10 +124,42 @@ globalThis.caches = {
   open: async (name) => {
     if (!cacheStorage.has(name)) cacheStorage.set(name, new Map());
     const entries = cacheStorage.get(name);
-    return { put: async (path, response) => entries.set(path, await response.text()), match: async (path) => (entries.has(path) ? new Response(entries.get(path)) : undefined) };
+    return {
+      put: async (path, response) => entries.set(path, await response.text()),
+      match: async (path) => (entries.has(path) ? new Response(entries.get(path)) : undefined),
+      delete: async (path) => entries.delete(path),
+    };
   },
 };
 const savedTexts = () => JSON.parse(cacheStorage.get("directorlink-alerts")?.get("/alert-texts.json") ?? "null");
+const savedAlertKey = () => JSON.parse(cacheStorage.get("directorlink-alerts")?.get("/alert-key.json") ?? "null");
+
+// The home behind the account service (sealed requests, ADR-050), while `online`: this key's alert
+// choices, as DirectorLink 1.7.0 keeps them; `fail`: it cannot save them.
+const home = { online: false, fail: false, requests: [], choices: { on: false, kinds: { doorbell: true } } };
+async function homeAnswer(body) {
+  const lock = await deriveLock(state.apiKey);
+  const envelope = JSON.parse(body).envelope;
+  const request = JSON.parse(await open(lock, envelope, "req"));
+  home.requests.push({ method: request.method, path: request.path, body: request.body });
+  let status = 200;
+  let answer = { id: envelope.key };
+  if (request.path === "/v1/alerts/choices") {
+    if (request.method === "PUT" && home.fail) {
+      status = 503;
+      answer = { status, code: "UNAVAILABLE" };
+    } else {
+      if (request.method === "PUT") {
+        if (typeof request.body.on === "boolean") home.choices.on = request.body.on;
+        for (const [kind, on] of Object.entries(request.body.kinds || {})) if (kind in home.choices.kinds) home.choices.kinds[kind] = on;
+      }
+      answer = structuredClone(home.choices);
+    }
+  }
+  const sealed = { id: request.id, ts: Math.floor(Date.now() / 1000), status, content_type: "application/json", body: JSON.stringify(answer) };
+  return { envelope: await seal(lock, { home: HOME, key: envelope.key }, "res", JSON.stringify(sealed)) };
+}
+const toHome = (method, path) => home.requests.filter((request) => request.method === method && request.path === path);
 
 // The account service: every call, and what POST /alerts answers next.
 const cloud = { calls: [], key: PUBLIC_KEY, posts: [], get: null };
@@ -138,7 +175,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (method === "DELETE") return reply(204, null);
   }
   // A sealed request through the account (the device's key, told to the account service).
-  if (pathname === `/v1/homes/${HOME}/e2e`) return reply(503, { code: "HOME_OFFLINE" });
+  if (pathname === `/v1/homes/${HOME}/e2e`) return home.online ? reply(200, await homeAnswer(init.body)) : reply(503, { code: "HOME_OFFLINE" });
   return reply(404, { code: "NOT_FOUND" });
 };
 const callsTo = (method) => cloud.calls.filter((call) => call.method === method && call.path === `/v1/homes/${HOME}/alerts`);
@@ -147,7 +184,7 @@ const { state, notify } = await import("../../app/js/state.js");
 const { setLanguage } = await import("../../app/js/i18n.js");
 const { saveRemote } = await import("../../app/js/remote.js");
 const session = await import("../../app/js/session.js");
-const { alertsUi, turnAlertsOff, turnAlertsOn } = await import("../../app/js/alerts.js");
+const { alertKey, alertsUi, turnAlertsOff, turnAlertsOn } = await import("../../app/js/alerts.js");
 const { alertsPanel } = await import("../../app/js/views/alerts.js");
 
 // ---- helpers -----------------------------------------------------------------------------------
@@ -240,17 +277,24 @@ test("on: permission asked once, a subscription with the service's key, register
   assert.equal(browser.asked, 1, "the permission is asked from the switch");
   assert.deepEqual(browser.subscribed, [{ userVisibleOnly: true, key: PUBLIC_KEY }]);
   const [post] = callsTo("POST");
-  assert.deepEqual(post.body, { endpoint: browser.subscription.endpoint, keys: { p256dh: `p256dh-${browser.made}`, auth: `auth-${browser.made}` } });
+  assert.deepEqual(post.body, { endpoint: browser.subscription.endpoint, keys: { p256dh: `p256dh-${browser.made}`, auth: `auth-${browser.made}` }, key_id: KEY_ID, offline: true }, "with this device's key");
   assert.equal(isOn(), true);
   assert.equal(shown(), "Alerts are on for this device.");
-  assert.deepEqual(savedTexts(), {
-    lang: "en",
-    dir: "ltr",
-    title: "DirectorLink",
-    offline: "Your home – DirectorLink has not reached it since {time}. Check the home’s internet connection and the controller.",
-    schedule_failed: "Your home – a schedule had a problem at {time}. Open the app to see what happened.",
-    other: "Your home – something needs your attention. Open the app to see what happened.",
-  });
+  const texts = savedTexts();
+  assert.deepEqual(
+    { lang: texts.lang, dir: texts.dir, title: texts.title, offline: texts.offline, schedule_failed: texts.schedule_failed, other: texts.other },
+    {
+      lang: "en",
+      dir: "ltr",
+      title: "DirectorLink",
+      offline: "Your home – DirectorLink has not reached it since {time}. Check the home’s internet connection and the controller.",
+      schedule_failed: "Your home – a schedule had a problem at {time}. Open the app to see what happened.",
+      other: "Your home – something needs your attention. Open the app to see what happened.",
+    }
+  );
+  assert.equal(texts.door_opened, "{name} was opened by {who} at {time}.");
+  assert.equal(texts.doorbell_title, "Someone is at the door");
+  assert.equal(savedAlertKey().key, KEY_ID, "the alert key of this device's key, for the worker");
 
   const endpoint = browser.subscription.endpoint;
   await press();
@@ -259,6 +303,7 @@ test("on: permission asked once, a subscription with the service's key, register
   assert.equal(browser.subscription, null);
   assert.equal(isOn(), false);
   assert.equal(browser.asked, 1);
+  assert.equal(savedAlertKey(), null, "the alert key goes too");
 });
 
 test("the words for the service worker follow the app's language", async () => {
@@ -306,8 +351,10 @@ test("refused: the permission, an account that is not an admin, a controller tha
   cloud.calls.length = 0;
   // Not an admin as far as the account service knows: the device's key is told to it through the
   // account (a sealed request), and it is asked once more.
+  home.online = true;
   cloud.posts.push([403, { code: "ADMIN_ONLY" }], [403, { code: "ADMIN_ONLY" }]);
   await press();
+  home.online = false;
   assert.equal(callsTo("POST").length, 2);
   assert.ok(cloud.calls.some((call) => call.path.endsWith("/e2e")), "a sealed request through the account in between");
   assert.equal(isOn(), false);
@@ -378,4 +425,149 @@ test("a forgotten key ends this device's alerts", async () => {
   assert.deepEqual(callsTo("DELETE").map((call) => call.body), [{ endpoint }]);
   assert.equal(browser.subscription, null);
   assert.equal(localStorage.getItem("directorlink.alerts"), null);
+});
+
+// ---- DirectorLink 1.7.0: alerts sealed to each key, chosen per kind (ADR-050) --------------------
+
+const VECTORS = JSON.parse(readFileSync(new URL("../vectors/alert.json", import.meta.url), "utf8"));
+const kindSwitch = (kind) => byKey(alertsPanel(), `alerts-kind:${kind}`);
+async function pressKind(kind) {
+  for (const listener of kindSwitch(kind).listeners.click) listener({ type: "click" });
+  for (let index = 0; index < 100 && alertsUi.saving; index += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+// A device with `role`, its home's controller DirectorLink 1.7.0, reached through the account.
+function withChoices(role, kinds = { doorbell: true }) {
+  admin();
+  Object.assign(state, { role, transport: "remote", system: { features: { alert_choices: true } } });
+  Object.assign(home, { online: true, fail: false, requests: [], choices: { on: false, kinds } });
+  cloud.calls.length = 0;
+  browser.permission = "granted";
+  browser.answer = "granted";
+}
+
+test("the alert key is the one the driver seals to (tests/vectors/alert.json)", async () => {
+  const key = await alertKey(VECTORS.device.api_key);
+  assert.equal(Buffer.from(key).toString("hex"), VECTORS.device.alert_key_hex);
+});
+
+test("with DirectorLink 1.7.0 every role may switch alerts on: registered with its key, the controller told, a switch per kind", async () => {
+  await turnAlertsOff();
+  withChoices("member", { doorbell: true, fridge_door: true });
+  assert.ok(alertsPanel(), "a member sees the card");
+  state.role = "viewer";
+  assert.ok(alertsPanel(), "and a viewer");
+  state.role = "member";
+  assert.match(alertsPanel().textContent, /sealed for this device/);
+
+  await press();
+  assert.equal(isOn(), true);
+  assert.equal(callsTo("POST")[0].body.key_id, KEY_ID);
+  assert.deepEqual(toHome("PUT", "/v1/alerts/choices").map((request) => request.body), [{ on: true }], "the controller is told");
+  assert.equal(home.choices.on, true);
+  assert.deepEqual(savedAlertKey().home, HOME);
+
+  // A switch per kind the controller offers this key; no offline alert for a member.
+  assert.equal(kindSwitch("offline"), null);
+  assert.equal(kindSwitch("door_opened"), null, "not for its role");
+  assert.equal(kindSwitch("doorbell").attributes["aria-checked"], "true");
+  await pressKind("doorbell");
+  assert.deepEqual(toHome("PUT", "/v1/alerts/choices").at(-1).body, { kinds: { doorbell: false } });
+  assert.equal(kindSwitch("doorbell").attributes["aria-checked"], "false");
+  assert.equal(kindSwitch("fridge_door").attributes["aria-checked"], "true");
+
+  // Off: the account service forgets the browser, the controller is told, the alert key goes.
+  await press();
+  assert.equal(isOn(), false);
+  assert.deepEqual(toHome("PUT", "/v1/alerts/choices").at(-1).body, { on: false });
+  assert.equal(callsTo("DELETE").length, 1);
+  assert.equal(savedAlertKey(), null);
+  assert.equal(kindSwitch("doorbell"), null, "no kinds while off");
+});
+
+test("an admin also chooses the servers' offline alert, kept with the browser's registration", async () => {
+  await turnAlertsOff();
+  withChoices("admin", { doorbell: true, door_opened: false, schedule_failed: true });
+  await press();
+  assert.equal(isOn(), true);
+  assert.equal(kindSwitch("offline").attributes["aria-checked"], "true");
+  assert.equal(kindSwitch("door_opened").attributes["aria-checked"], "false", "doors opened are off until chosen");
+  cloud.calls.length = 0;
+  await pressKind("offline");
+  assert.equal(callsTo("POST")[0].body.offline, false, "registered again, without the offline alert");
+  assert.equal(kindSwitch("offline").attributes["aria-checked"], "false");
+  assert.equal(toHome("PUT", "/v1/alerts/choices").length, 1, "the controller has nothing to do with it");
+  await pressKind("door_opened");
+  assert.deepEqual(home.choices.kinds, { doorbell: true, door_opened: true, schedule_failed: true });
+  await turnAlertsOff();
+});
+
+test("a controller that cannot be told leaves alerts off; a change it cannot save says so", async () => {
+  await turnAlertsOff();
+  withChoices("member");
+  home.fail = true;
+  await press();
+  assert.equal(isOn(), false, "nothing it seals would come");
+  assert.equal(callsTo("DELETE").length, 1, "the browser is unregistered again");
+  assert.equal(browser.subscription, null);
+  assert.equal(shown(), "Alerts could not be switched on. Check the connection and try again.");
+
+  home.fail = false;
+  await press();
+  assert.equal(isOn(), true);
+  home.fail = true;
+  await pressKind("doorbell");
+  assert.equal(shown(), "Couldn’t save that. Check the connection and try again.");
+  assert.equal(kindSwitch("doorbell").attributes["aria-checked"], "true", "as it was");
+  home.fail = false;
+  await turnAlertsOff();
+});
+
+test("an account that has not used its key at the home yet uses it once through the account, then registers", async () => {
+  await turnAlertsOff();
+  withChoices("member");
+  cloud.posts.push([403, { code: "KEY_NOT_LINKED" }]);
+  await press();
+  assert.equal(callsTo("POST").length, 2);
+  assert.ok(toHome("GET", "/v1/api-keys/current").length >= 1, "a sealed request through the account in between");
+  assert.equal(isOn(), true);
+  await turnAlertsOff();
+});
+
+test("when that request cannot reach the home, it says the home could not be reached, not that the device is not linked", async () => {
+  await turnAlertsOff();
+  withChoices("member");
+  home.online = false;
+  cloud.posts.push([403, { code: "KEY_NOT_LINKED" }]);
+  await press();
+  assert.equal(isOn(), false);
+  assert.equal(callsTo("POST").length, 1, "not registered again in vain");
+  assert.equal(shown(), "Your home couldn’t be reached to confirm this device. Check that it’s online, then try again.");
+  assert.equal(browser.subscription, null, "the subscription goes again");
+  home.online = true;
+});
+
+test("a controller that does not know this device has alerts on is told: switched on by an app before 1.7.0, or restored", async () => {
+  await turnAlertsOff();
+  withChoices("admin", { doorbell: true, door_opened: false, schedule_failed: true });
+  // A new start of the page: nothing read from the controller yet.
+  await press();
+  await turnAlertsOff({ quiet: true });
+  home.choices.on = false;
+  home.requests.length = 0;
+  // As the app before 1.7.0 left it: no key id, and the controller knows nothing of it.
+  browser.subscription = subscription(PUBLIC_KEY);
+  localStorage.setItem("directorlink.alerts", JSON.stringify({ home: HOME, endpoint: browser.subscription.endpoint }));
+  notify();
+  // Until the controller is told (a fixed 100 ms was too short on a busy machine), at most 2 s.
+  for (let waited = 0; waited < 2000 && toHome("PUT", "/v1/alerts/choices").length === 0; waited += 20) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(toHome("GET", "/v1/alerts/choices").length, 1);
+  assert.deepEqual(toHome("PUT", "/v1/alerts/choices").map((request) => request.body), [{ on: true }]);
+  assert.equal(home.choices.on, true);
+  assert.equal(isOn(), true);
+  assert.equal(kindSwitch("schedule_failed").attributes["aria-checked"], "true");
+  await turnAlertsOff();
 });

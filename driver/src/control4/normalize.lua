@@ -114,10 +114,48 @@ local function normalizeLinkTable(raw)
     return result
 end
 
+-- The Samsung Refrigerator (DirectorLink) driver has five uibutton proxies: its status tile (the
+-- primary, listed first in its driver.xml, so Director gives it the lowest id) and one per feature.
+-- The refrigerator is that first proxy, in its room; the others are no devices of their own.
+-- Returns protocol id -> the id of its refrigerator.
+local function refrigeratorProxies(rawDevices)
+    local first = {}
+    for rawId, raw in pairs(rawDevices or {}) do
+        local id = toId(rawId)
+        if id and type(raw) == "table" and type(raw.protocol) == "table" then
+            for protocolId, link in pairs(raw.protocol) do
+                protocolId = toId(protocolId)
+                if protocolId and type(link) == "table" and Classifier.isRefrigeratorDriver(link.driverFileName) then
+                    if not first[protocolId] or id < first[protocolId] then
+                        first[protocolId] = id
+                    end
+                end
+            end
+        end
+    end
+    return first
+end
+
+-- The refrigerator a proxy belongs to: true when it is the refrigerator, false when it is one of its
+-- other proxies, nil when it is not a refrigerator's.
+local function refrigeratorPart(raw, id, refrigerators)
+    if type(raw.protocol) ~= "table" then
+        return nil
+    end
+    for protocolId in pairs(raw.protocol) do
+        local first = refrigerators[toId(protocolId)]
+        if first then
+            return first == id
+        end
+    end
+    return nil
+end
+
 function Normalize.devices(rawDevices, bridgeDeviceId)
     local entities = {}
     local protocols = {}
     bridgeDeviceId = toId(bridgeDeviceId)
+    local refrigerators = refrigeratorProxies(rawDevices)
 
     -- First collect backing protocol devices. They are retained internally
     -- but are not duplicated in the homeowner-facing entity list.
@@ -144,8 +182,9 @@ function Normalize.devices(rawDevices, bridgeDeviceId)
             local hasProtocol = type(raw.protocol) == "table" and next(raw.protocol) ~= nil
             local isBackingProtocol = type(raw.proxies) == "table" and next(raw.proxies) ~= nil
 
-            if hasProtocol or not isBackingProtocol then
-                local classification = Classifier.classify(raw.driverFileName)
+            local refrigerator = refrigeratorPart(raw, id, refrigerators)
+            if (hasProtocol or not isBackingProtocol) and refrigerator ~= false then
+                local classification = refrigerator and { kind = "refrigerator", recognized = true } or Classifier.classify(raw.driverFileName)
                 local protocolLinks = hasProtocol and normalizeLinkTable(raw.protocol) or {}
 
                 entities[id] = {

@@ -13,6 +13,9 @@
 --        the minute of that time (the home's minute of automatic backups); out: "TICKED <ran>\n"
 --   in:  "remove <device id>\n" removes a device from the project in Composer, then Refresh Project;
 --        out: "REMOVED\n"
+--   in:  "linked\n" switches Remote Access on and marks the home's identity as one the relay has
+--        accepted (there is no relay here), so scene links can be made; out: "LINKED <home id>\n"
+--   in:  "event <device id> <event id>\n" a device fires an event; out: "EVENT <times delivered>\n"
 -- With a second argument "sonos" (scripts/dev_server.py --sonos), the driver's requests to Sonos
 -- players go out through the dev server to the fake players (tests/sonos/fake-sonos.mjs):
 --   out: "FETCH <hex JSON { method, url, headers, body_hex }>\n"
@@ -173,6 +176,35 @@ local function advanceFans()
     fanCommandsSeen = #mock.commands
 end
 
+-- The Samsung refrigerator (Mock.withRefrigerator, the driver 140) follows SET_FEATURE as its
+-- driver does: the variable changes once the refrigerator confirms, REFRIGERATOR_SECONDS later
+-- (through Samsung's cloud, typically 4 s). Like the shades, it moves on when a request comes in.
+local REFRIGERATOR_SECONDS = 4
+local REFRIGERATOR_FEATURES = { ["Power Cool"] = "POWER_COOL", ["Power Freeze"] = "POWER_FREEZE", ["Sabbath Mode"] = "SABBATH_MODE", ["Ice Maker"] = "ICE_MAKER" }
+local fridgeCommandsSeen, fridgeChanges = #mock.commands, {}
+
+local function advanceRefrigerators()
+    local now = os.time()
+    for index = fridgeCommandsSeen + 1, #mock.commands do
+        local command = mock.commands[index]
+        local device = mock.project.devices[command.device]
+        local variable = command.command == "SET_FEATURE" and REFRIGERATOR_FEATURES[command.params and command.params.Feature]
+        if device and variable and require("src.adapters.classifier").isRefrigeratorDriver(device.driverFileName) then
+            fridgeChanges[#fridgeChanges + 1] = { at = now + REFRIGERATOR_SECONDS, protocol = command.device, values = { [variable] = command.params.State == "On" and "1" or "0" } }
+        end
+    end
+    fridgeCommandsSeen = #mock.commands
+    local waiting = {}
+    for _, change in ipairs(fridgeChanges) do
+        if now >= change.at then
+            Mock.setRefrigerator(mock, change.protocol, change.values)
+        else
+            waiting[#waiting + 1] = change
+        end
+    end
+    fridgeChanges = waiting
+end
+
 local function fromHex(text)
     return (text:gsub("%x%x", function(pair)
         return string.char(tonumber(pair, 16))
@@ -270,6 +302,19 @@ local function command(line)
     if tick then
         return "TICKED " .. tostring(require("src.core.scheduler").tick(tonumber(tick)))
     end
+    if line == "linked" then
+        local Relay = require("src.cloud.relay")
+        local identity = Relay.identity()
+        identity.linked = true
+        Relay.restoreIdentity(identity)
+        Properties["Remote Access"] = "On"
+        OnPropertyChanged("Remote Access")
+        return "LINKED " .. identity.home_id
+    end
+    local fired, event = line:match("^event (%d+) (%d+)$")
+    if fired then
+        return "EVENT " .. Mock.fireDeviceEvent(mock, tonumber(fired), tonumber(event))
+    end
     local removed = line:match("^remove (%d+)$")
     if removed then
         Mock.removeDevice(mock.project, tonumber(removed))
@@ -305,6 +350,7 @@ for line in io.lines() do
     if handle then
         advanceShades()
         advanceFans()
+        advanceRefrigerators()
         sonosTick()
         answerSonosSearch()
         handle = tonumber(handle)

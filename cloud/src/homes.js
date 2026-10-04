@@ -16,6 +16,7 @@
 //   POST   /v1/homes/{home_id}/join-requests/{id}   { decision: approve | refuse } (the owner only)
 //   GET    /v1/homes/{home_id}/backups[/{id}], DELETE /v1/homes/{home_id}/backups   (backups.js)
 //   GET, POST, DELETE /v1/homes/{home_id}/alerts    this browser's alerts (admins; alerts.js)
+//   /v1/homes/{home_id}/device-requests[/...]       a new device joins by approval (device-requests.js)
 //
 // All need the session cookie; they answer CORS with credentials only for the app's origins, and
 // refuse changes from any other origin.
@@ -23,6 +24,7 @@
 import { appOrigins, currentUser } from "./accounts.js";
 import { BACKUP_ROUTES } from "./backups.js";
 import { handleHomeAlerts, homesChanged } from "./alerts.js";
+import { DEVICE_REQUEST_ROUTES } from "./device-requests.js";
 import { json, problem, randomHex, readText } from "./http.js";
 import { PURGE_GRACE_MS, forgetInvitations } from "./invitations.js";
 import { validKeyId } from "./member-keys.js";
@@ -677,6 +679,8 @@ const ROUTES = [
   [/^\/v1\/homes\/([0-9a-f]{32})\/join-requests$/, { GET: (r, env, user, m) => listJoinRequests(env, user, m[1]) }],
   [/^\/v1\/homes\/([0-9a-f]{32})\/join-requests\/([0-9a-f]{32})$/, { POST: (r, env, user, m) => decideJoinRequest(r, env, user, m[1], m[2]) }],
   ...BACKUP_ROUTES,
+  // A new device joins by approval from another device of the account (ADR-053).
+  ...DEVICE_REQUEST_ROUTES,
   // Alerts on admins' devices (ADR-047, alerts.js).
   [/^\/v1\/homes\/([0-9a-f]{32})\/alerts$/, Object.fromEntries(["GET", "POST", "DELETE"].map((method) => [method, (r, env, user, m) => handleHomeAlerts(r, env, user, m[1])]))],
 ];

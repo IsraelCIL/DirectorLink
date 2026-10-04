@@ -87,7 +87,8 @@ Composer. A file must never switch a safety setting on.
     "schedules": { "version": 1, "schedules": [] },
     "calendar": { "version": 1, "settings": {} },
     "remote_identity": { "version": 1, "linked": true, "home_id": "…", "home_secret": "…" },
-    "sonos_rooms": { "version": 1, "rooms": { "RINCON_…": { "room_id": 10, "name": "Kitchen" } } }
+    "sonos_rooms": { "version": 1, "rooms": { "RINCON_…": { "room_id": 10, "name": "Kitchen" } } },
+    "scene_links": { "version": 1, "links": [{ "id": "…", "scene_id": "…", "alg": "sha256", "hash": "…", "home": "…", "by": "…" }] }
   }
 }
 ```
@@ -99,6 +100,18 @@ controller's MAC address (`C4:GetUniqueMAC`), the same after the driver is added
 on a replacement; null when Director does not give it. Without a linked identity,
 `remote_identity` is `{"version": 1, "linked": false}`. `sonos_rooms` (1.6.0) may be missing: a
 backup made before 1.6.0 has none, and restores as it did.
+
+`scene_links` (1.7.0, ADR-051) holds each scene link as the controller keeps it: a hash of its
+secret, never the secret, the home id its address names and the key that made it (`by`). The links
+follow the keys: the backup's come back only when its keys do (`keys.action` `restore`: only the
+restoring device is paired, after a reinstall or on a replacement; from a backup made before 1.7.0,
+the links this controller has); otherwise this controller's links stay as they are, so a link
+removed or replaced since the backup was made never comes back. Either way only the links whose
+scene comes back without doors or gates, that name the home identity in use after the restore (the
+backup's, when it moves here; else this controller's), and whose key is among the keys after it (one
+that `replaces_key` names passes its links to the restoring device's key). So the family's NFC tags
+and Shortcuts keep working after a replaced controller is restored with its identity. The preview
+counts them (`counts.scene_links`).
 
 It holds every key's lock key and the home secret: whoever has the document can reach the home
 through the account, sealed, as any of its devices. That is why it goes only in sealed requests

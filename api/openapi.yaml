@@ -4039,6 +4039,9 @@ components:
             climate_last_mode:
               type: boolean
               description: "Always true since 1.10.0: each thermostat's `last_mode` in `/v1/thermostats`, and the climate scene step `mode` `on` that turns each AC on as it was (ADR-070). Missing before 1.10.0, whose scenes refuse `on`."
+            scene_levels_dimmers_only:
+              type: boolean
+              description: "Always true since ADR-077's change of 2026-10-09: a lights scene step with a level above 0 for a room or the whole home (no `device_ids`) goes to dimmers only, and on/off lights there stay as they are (skipped, `ON_OFF_ONLY`, counted in the run's `on_off_only`); one the step names still turns on. Missing before, when such a step turned them on."
 
     PairRequest:
       oneOf:
@@ -4529,7 +4532,11 @@ components:
             minimum: 1
         set:
           description: |
-            lights `{"on": true|false}` or `{"brightness": 0-100}` (on/off lights turn on);
+            lights `{"on": true|false}` or `{"brightness": 0-100}` (on/off lights the step names
+            by `device_ids` turn on; a level above 0 for a room or the whole home goes to dimmers
+            only, and on/off lights there are skipped with `ON_OFF_ONLY` since ADR-077's change of
+            2026-10-09, `features.scene_levels_dimmers_only`; off and a level of 0 turn every light
+            off);
             climate any of `mode` (off, heat, cool, auto), `target_temperature` (kept within
             each thermostat's range) and `fan_speed` (low, medium, high, auto, on, circulate; left
             out where a unit does not have it), and with `mode: off` nothing else; what is left out
@@ -4946,14 +4953,18 @@ components:
           description: Devices whose commands were handed to the controller (and Sonos groups told to pause or stop).
         skipped:
           type: integer
-          description: Devices left alone (not allowed for this key, not possible for the device, or gone from the project; since 1.10.0 an AC a step turns on as it was whose last mode is not known yet, `NO_LAST_MODE`).
+          description: Devices left alone (not allowed for this key, not possible for the device, or gone from the project; since 1.10.0 an AC a step turns on as it was whose last mode is not known yet, `NO_LAST_MODE`; since ADR-077's change of 2026-10-09 the on/off lights a level for a room or the whole home leaves as they are, `ON_OFF_ONLY`, also counted in `on_off_only`).
+        on_off_only:
+          type: integer
+          minimum: 1
+          description: Of the skipped, the on/off lights (`dimmable` false) a level for a room or the whole home left as they are, as meant (`ON_OFF_ONLY`); every one, while `problems` lists at most 50, these after the others. Only when there are some. Since ADR-077's change of 2026-10-09.
         failed:
           type: integer
           description: Devices whose commands the controller refused.
         problems:
           type: array
           maxItems: 50
-          description: What was skipped or failed, and devices that ran with a setting left out (`partial`, counted in `ran`), at most 50.
+          description: What was skipped or failed, and devices that ran with a setting left out (`partial`, counted in `ran`), at most 50; on/off lights left as they are (`ON_OFF_ONLY`) come after the others.
           items:
             type: object
             required: [step, device_id, outcome, code, detail]
@@ -7210,6 +7221,9 @@ components:
             no_last_mode:
               type: integer
               description: Of the skipped, the ACs a scene left off because their last mode is not known yet (`NO_LAST_MODE`); only when there are some. Since 1.10.0 (ADR-070).
+            on_off_only:
+              type: integer
+              description: Of the skipped, the on/off lights a level for a room or the whole home left as they are, as meant (`ON_OFF_ONLY`, the run's `on_off_only`); only when there are some. Since ADR-077's change of 2026-10-09.
         ids:
           type: object
           properties:

@@ -360,11 +360,16 @@ export function outcomeText(entry) {
   const parts = [];
   if (counts) {
     const total = (counts.ran || 0) + (counts.skipped || 0) + (counts.failed || 0);
+    // Switches a level for a room or the whole home left as they are, as meant: said apart from
+    // the skipped (ADR-077, 2026-10-09).
+    const switches = counts.on_off_only || 0;
+    const skipped = (counts.skipped || 0) - switches;
     if (counts.failed) parts.push(t("history.counts.failed", { count: counts.failed, total }));
     else if (counts.ran) parts.push(t("history.counts.ran", { count: counts.ran }));
-    if (counts.skipped) parts.push(t("history.counts.skipped", { count: counts.skipped }));
+    if (skipped > 0) parts.push(t("history.counts.skipped", { count: skipped }));
     // ACs a scene left off, their last mode not known yet (1.10.0, ADR-070).
     if (counts.no_last_mode) parts.push(t("history.counts.noLastMode", { count: counts.no_last_mode }));
+    if (switches > 0) parts.push(t("history.counts.switchesLeft", { count: switches }));
     if (!total) parts.push(t("history.counts.none"));
   }
   if (entry.kind === "schedule" && entry.note === "late") parts.push(t("history.note.late"));

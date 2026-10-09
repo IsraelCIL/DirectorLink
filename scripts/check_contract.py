@@ -611,6 +611,13 @@ def scenario(client, bridge):
     client.check("POST", f"/v1/scenes/{scene['id']}/run", 202)
     client.check("POST", "/v1/scenes/deadbeef/run", 404)
     client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "lights", "device_ids": [20], "set": {"on": True}}]})
+    # A level for a room goes to its dimmers only; the KNX switch there stays as it is (ADR-077).
+    dimmed = client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "lights", "room_id": 11, "set": {"brightness": 50}}]})
+    switches = [problem["device_id"] for problem in dimmed["problems"] if problem["code"] == "ON_OFF_ONLY"]
+    if 21 not in switches or dimmed.get("on_off_only") != len(switches) or dimmed["failed"] != 0:
+        fail(f"POST /v1/scenes/try: a level for the Living Room should leave its switches as they are: {dimmed}")
+    if client.check("GET", "/v1/system", 200)["features"].get("scene_levels_dimmers_only") is not True:
+        fail("GET /v1/system should say features.scene_levels_dimmers_only")
     client.check("POST", "/v1/scenes/try", 400, body={"steps": [{"type": "speakers", "set": {}}]})
     client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "fans", "set": {"on": True}}]})
     client.check("POST", "/v1/scenes/try", 400, body={"steps": [{"type": "fans", "set": {"speed": 0}}]})

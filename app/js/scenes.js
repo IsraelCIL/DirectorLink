@@ -90,6 +90,15 @@ export function notSeenOnText(thermostats) {
   return t("scenes.notSeenOn", { count: thermostats.length, names: thermostats.map((thermostat) => isolate(thermostat.name)).join(", ") });
 }
 
+// A level for a room or the whole home goes to its dimmers only, and the switches there stay as
+// they are (ADR-077, 2026-10-09: a KNX switch may be a heater or a door lock). A lights step named
+// by its devices still turns a switch on. Drivers before say nothing of it, and turn them on.
+export const levelsForDimmersOnly = () => state.system?.features?.scene_levels_dimmers_only === true;
+
+export function dimmersOnly(step) {
+  return levelsForDimmersOnly() && step.type === "lights" && !Array.isArray(step.device_ids) && Number.isFinite(step.set?.brightness) && step.set.brightness > 0;
+}
+
 export function sceneOpensDoors(scene) {
   return (scene.steps || []).some((step) => step.type === "relays");
 }
@@ -113,7 +122,7 @@ function onlyElsewhere(step) {
 
 export function stepWhat(step) {
   if (onlyElsewhere(step)) return t(`scenes.elsewhere.${step.type}`);
-  if (!Array.isArray(step.device_ids)) return t(`scenes.all.${step.type}`);
+  if (!Array.isArray(step.device_ids)) return dimmersOnly(step) ? t("scenes.allDimmers") : t(`scenes.all.${step.type}`);
   let what = t(`scenes.count.${step.type}`, { count: step.device_ids.length });
   if (step.device_ids.length === 1) {
     const device = devicesOfType(step.type).find((item) => item.id === step.device_ids[0]);
@@ -213,7 +222,8 @@ export function sceneSummary(scene) {
   const steps = scene.steps || [];
   if (!steps.length) return t("scenes.noSteps");
   const parts = steps.slice(0, 3).map((step) => {
-    const what = step.room_id != null && !Array.isArray(step.device_ids) ? t(`scenes.inRoom.${step.type}`, { room: isolate(stepWhere(step)) }) : stepWhat(step);
+    const inRoom = dimmersOnly(step) ? "scenes.inRoomDimmers" : `scenes.inRoom.${step.type}`;
+    const what = step.room_id != null && !Array.isArray(step.device_ids) ? t(inRoom, { room: isolate(stepWhere(step)) }) : stepWhat(step);
     return `${isolate(what)}: ${stepAction(step)}`;
   });
   if (steps.length > 3) parts.push(t("scenes.more", { count: steps.length - 3 }));
@@ -252,11 +262,27 @@ export function currentSteps(steps) {
 
 // ---- running -------------------------------------------------------------------------------
 
+// The switches a run left as they are, a level for a room or the whole home being for dimmers
+// (ADR-077): the controller counts them all (`on_off_only`), its problems name at most 50.
+export function switchesLeft(result) {
+  if (Number.isInteger(result?.on_off_only)) return result.on_off_only;
+  return (result?.problems || []).filter((problem) => problem.code === "ON_OFF_ONLY").length;
+}
+
+// Whether a run left out something it was meant to do: a device failed or was skipped, or ran with
+// a setting left out. Switches a level left as they are were not meant to be set.
+export function runPartial(result) {
+  const problems = result.problems || [];
+  return result.failed > 0 || result.skipped - switchesLeft(result) > 0 || problems.some((problem) => problem.code !== "ON_OFF_ONLY");
+}
+
 // What a run did, in one line (the controller says why devices were skipped).
 export function resultText(result) {
-  const problems = result.problems || [];
+  const switches = switchesLeft(result);
+  const problems = (result.problems || []).filter((problem) => problem.code !== "ON_OFF_ONLY");
+  const skipped = result.skipped - switches;
   if (result.failed > 0) return t("scenes.result.failed", { count: result.failed });
-  if (result.skipped > 0) {
+  if (skipped > 0) {
     // A music step's (device_id 0) FORBIDDEN is a Sonos room this person may not control (1.8.0).
     const codes = new Set(
       problems.filter((problem) => problem.outcome !== "partial").map((problem) => (problem.code === "FORBIDDEN" && problem.device_id === 0 ? "MUSIC_FORBIDDEN" : problem.code))
@@ -271,10 +297,12 @@ export function resultText(result) {
     if (codes.size === 1 && codes.has("NO_PLAYERS")) return t("scenes.result.noPlayers");
     if (codes.size === 1 && codes.has("NO_SONOS_ROOM")) return t("scenes.result.noSonosRoom");
     // ACs left off: their last mode is not known yet (1.10.0).
-    if (codes.size === 1 && codes.has("NO_LAST_MODE")) return t("scenes.result.noLastMode", { count: result.skipped });
-    return t("scenes.result.skipped", { count: result.skipped });
+    if (codes.size === 1 && codes.has("NO_LAST_MODE")) return t("scenes.result.noLastMode", { count: skipped });
+    return t("scenes.result.skipped", { count: skipped });
   }
   if (problems.length) return t("scenes.result.partial");
+  // Only dimmers got the level: the switches there stayed as they were, as meant.
+  if (switches > 0) return t("scenes.result.switchesLeft", { count: switches });
   return t("scenes.result.done");
 }
 
@@ -309,8 +337,7 @@ export async function runScene(scene) {
   let outcome;
   try {
     const result = await api(`/v1/scenes/${scene.id}/run`, { method: "POST" });
-    const partial = result.failed > 0 || result.skipped > 0 || (result.problems || []).length > 0;
-    outcome = { stage: partial ? "partial" : "done", text: resultText(result) };
+    outcome = { stage: runPartial(result) ? "partial" : "done", text: resultText(result) };
   } catch (error) {
     noteForbidden(error);
     outcome = { stage: "error", text: t("scenes.result.error", { error: errorText(error) }) };

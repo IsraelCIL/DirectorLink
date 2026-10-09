@@ -204,9 +204,11 @@ end
 -- What the phone is told: everything ran, some of it, none of it (skipped or failed), or nothing
 -- was there to run (its devices were all removed in Composer since).
 local function outcome(result)
-    if result.ran == 0 and result.skipped == 0 and result.failed == 0 then
+    -- Switches a level for a room or the whole home left as they are were not to be set (ADR-077).
+    local skipped = result.skipped - (result.on_off_only or 0)
+    if result.ran == 0 and skipped == 0 and result.failed == 0 then
         return "nothing"
-    elseif result.skipped == 0 and result.failed == 0 then
+    elseif skipped == 0 and result.failed == 0 then
         return "ran"
     end
     return result.ran > 0 and "partly" or "failed"

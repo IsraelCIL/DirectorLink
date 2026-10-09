@@ -181,6 +181,21 @@ function tests.a_run_that_skips_devices_says_partly()
     T.eq(entry.counts.skipped, 1)
 end
 
+-- A level for a room goes to its dimmers only (ADR-077, 2026-10-09): the switch it leaves as it is
+-- was not to be set, so the run "ran".
+function tests.switches_a_level_for_a_room_leaves_as_they_are_do_not_make_a_run_partly()
+    local s = start({ scene = { name = "Evening", steps = { { type = "lights", room_id = 11, set = { brightness = 50 } } } } })
+    local link = makeLink(s).json
+    local before = #s.mock.commands
+    T.eq(run(s, link.link_id, link.secret).result, "ran")
+    for index = before + 1, #s.mock.commands do
+        T.truthy(s.mock.commands[index].device ~= 21, "the switch stays as it is")
+    end
+    local entry = history(s, "scene")[1]
+    T.eq(entry.outcome, "ran")
+    T.same(entry.counts, { ran = 1, skipped = 1, failed = 0, on_off_only = 1 })
+end
+
 function tests.a_wrong_secret_or_an_unknown_link_are_refused_alike()
     local s = start()
     local link = makeLink(s).json

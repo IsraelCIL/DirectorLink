@@ -2,6 +2,21 @@
 
 ## Current release
 
+`v1.10.3` — A member's requests (1103b), a room's level goes to dimmers only (1103a). No Worker change; no D1 migration.
+
+## 1103b. A member's requests (1.10.3)
+
+1. On a member's device, go through Home, Scenes, Climate and Settings and leave the app open two minutes: DirectorLink's log shows no `GET /v1/schedules -> 403` for that key.
+2. On an admin's device, Scenes → Schedules still lists the schedules and shows the weather card.
+
+## 1103a. A room's level goes to dimmers only (1.10.3)
+
+1. Add a lights action for a room with KNX switches and a dimmer, choose Dim: the editor says "Only dimmers get a percentage; switches stay as they are", and the summary reads "All dimmers (Room): 50%". Pick lights one by one (a dimmer and a switch): the note goes.
+2. Run a scene "Whole home lights 30%": the dimmers go to 30%; no switch changes (heaters, a lock on a switch). The result says "Done — only dimmers get a percentage; N switches stayed as they were".
+3. History: "N switches left as they were". A step naming one switch at 50% turns it on. Off, On and 0% for a room still reach the switches.
+
+## Previous release
+
 `v1.10.2` — Light switches and KNX dimmers (1102b), thermostats in their own scale (1102a). No Worker change; no D1 migration.
 
 ## 1102b. Light switches and KNX dimmers (1.10.2)

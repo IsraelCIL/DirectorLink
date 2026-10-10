@@ -165,6 +165,12 @@ local function build(kind, action, fields)
         if unknown > 0 then
             entry.counts.no_last_mode = unknown
         end
+        -- Of the skipped, the switches a level for a room or the whole home left as they are
+        -- (ON_OFF_ONLY; ADR-077, 2026-10-09): the run counts them all, its problems only 50.
+        local switches = number(fields.counts.on_off_only)
+        if switches and switches > 0 then
+            entry.counts.on_off_only = switches
+        end
         -- Failed on a device, nothing sent (all skipped), or ran.
         if not entry.outcome then
             local counts = entry.counts

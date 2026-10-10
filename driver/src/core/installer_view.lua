@@ -239,8 +239,13 @@ function View.lastAutomation(event)
     else
         local r = event.result or {}
         result = string.format("%d device%s", r.ran or 0, (r.ran or 0) == 1 and "" or "s")
-        if (r.skipped or 0) > 0 then
-            result = result .. string.format(", %d skipped", r.skipped)
+        -- Switches a level for a room or the whole home left as they are (ADR-077, 2026-10-09).
+        local switches = tonumber(r.on_off_only) or 0
+        if (r.skipped or 0) - switches > 0 then
+            result = result .. string.format(", %d skipped", r.skipped - switches)
+        end
+        if switches > 0 then
+            result = result .. string.format(", %d switch%s left as %s", switches, switches == 1 and "" or "es", switches == 1 and "it was" or "they were")
         end
         if (r.failed or 0) > 0 then
             result = result .. string.format(", %d failed", r.failed)
@@ -266,6 +271,10 @@ local function stepText(step, registry)
     local set, action = step.set, nil
     if step.type == "lights" then
         action = (set.on == false or set.brightness == 0) and "off" or set.brightness and (set.brightness .. "%") or "on"
+        -- A level for a room or the whole home goes to dimmers only (ADR-077, 2026-10-09).
+        if (set.brightness or 0) > 0 and not step.device_ids then
+            action = action .. ", dimmers only"
+        end
     elseif step.type == "climate" then
         local parts = {}
         if set.mode == "on" then

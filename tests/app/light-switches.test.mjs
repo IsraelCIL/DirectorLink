@@ -83,6 +83,8 @@ const { setLanguage, t } = await import("../../app/js/i18n.js");
 const { homeView } = await import("../../app/js/views/home.js");
 const { roomView } = await import("../../app/js/views/room.js");
 const { resetSceneEditor, sceneEditorView } = await import("../../app/js/views/scenes.js");
+const { resultText, runPartial, sceneSummary, stepWhat } = await import("../../app/js/scenes.js");
+const { outcomeText } = await import("../../app/js/views/history.js");
 const { commandCatalog } = await import("../../app/js/commands.js");
 const { parseCommand } = await import("../../app/js/command-parser.js");
 
@@ -240,6 +242,139 @@ test("a command to dim a switch is answered plainly, and dims only the dimmers o
   try {
     await setLanguage("he");
     assert.match(t("command.problem.cannotDim", { name: "Pendant" }), /^Pendant רק נדלק ונכבה\.$/);
+  } finally {
+    await setLanguage("en");
+  }
+});
+
+// ---- a level for a room or the whole home (ADR-077, 2026-10-09) -------------------------------
+// A driver that says `scene_levels_dimmers_only` sends a level for a room or the whole home to its
+// dimmers only; the switches there stay as they are (the owner's heaters and door lock are KNX
+// switches). The editor says so, the action's words name the dimmers, and a run that left switches
+// as they are is done, not partly done.
+
+const press = (nodes, key) => {
+  const element = byKey(nodes, key);
+  assert.ok(element, `${key} is on the screen`);
+  element.dispatch("click");
+};
+const noteOf = (nodes) => plain(byKey(nodes, "add-dimmers-only")?.textContent || "");
+const addSummary = (nodes) => leaves(nodes).find((text) => text.startsWith("Adds:")) || "";
+const add = () => sceneEditorView(SCENE, true, actions);
+const ONLY_DIMMERS = "Only dimmers get a percentage; switches stay as they are.";
+const levelsForDimmers = () => {
+  state.system = { bridge: { version: "1.10.3" }, features: { users: true, scene_levels_dimmers_only: true } };
+};
+
+test("a level for a room or the whole home says that only dimmers get it", async () => {
+  home();
+  levelsForDimmers();
+  let nodes = add();
+  assert.ok(byKey(nodes, "add-room:home") && byKey(nodes, "add-kind:lights"));
+  assert.equal(byKey(nodes, "add-dimmers-only"), null, "Off: nothing to say");
+  press(nodes, "add-light:dim");
+  nodes = add();
+  assert.equal(noteOf(nodes), ONLY_DIMMERS, "the whole home");
+  assert.equal(addSummary(nodes), "Adds: All dimmers (Whole home): 50%");
+  press(nodes, "add-room:10");
+  nodes = add();
+  press(nodes, "add-light:dim");
+  nodes = add();
+  assert.equal(noteOf(nodes), ONLY_DIMMERS, "the kitchen");
+  // Its lights picked one by one: the switch among them gets the level, so it turns on.
+  press(nodes, "add-choose");
+  nodes = add();
+  byKey(nodes, "pick:20").dispatch("change", { target: { checked: true } });
+  byKey(nodes, "pick:21").dispatch("change", { target: { checked: true } });
+  nodes = add();
+  assert.equal(byKey(nodes, "add-dimmers-only"), null, "named lights: a switch turns on");
+  // All of them picked is the room again: switches stay as they are.
+  byKey(nodes, "pick:22").dispatch("change", { target: { checked: true } });
+  nodes = add();
+  assert.equal(noteOf(nodes), ONLY_DIMMERS);
+  press(nodes, "add-light:on");
+  nodes = add();
+  assert.equal(byKey(nodes, "add-dimmers-only"), null, "On turns every light on");
+  press(nodes, "add-light:dim");
+
+  try {
+    await setLanguage("he");
+    assert.equal(noteOf(add()), "רק אורות עם עמעום מקבלים אחוז; אורות שרק נדלקים ונכבים נשארים כמו שהם.");
+    await setLanguage("es");
+    assert.match(noteOf(add()), /^Solo las luces regulables reciben un porcentaje/);
+    await setLanguage("it");
+    assert.match(noteOf(add()), /^Solo le luci dimmerabili ricevono una percentuale/);
+  } finally {
+    await setLanguage("en");
+  }
+
+  // Without switches there, nothing to say.
+  state.lights = state.lights.map((light) => ({ ...light, dimmable: true }));
+  assert.equal(byKey(add(), "add-dimmers-only"), null);
+  // A driver that turns them on (1.10.2 and before) says nothing of it either.
+  home();
+  nodes = add();
+  press(nodes, "add-light:dim");
+  nodes = add();
+  assert.equal(byKey(nodes, "add-dimmers-only"), null);
+  assert.equal(addSummary(nodes), "Adds: All lights (Whole home): 50%");
+});
+
+test("an action with a level for a room or the whole home names the dimmers", () => {
+  home();
+  const room = { type: "lights", room_id: 10, device_ids: null, set: { brightness: 50 } };
+  const everywhere = { type: "lights", room_id: null, device_ids: null, set: { brightness: 30 } };
+  const named = { type: "lights", room_id: 10, device_ids: [20, 21], set: { brightness: 50 } };
+  const off = { type: "lights", room_id: null, device_ids: null, set: { brightness: 0 } };
+  assert.equal(stepWhat(everywhere), "All lights", "a driver that turns switches on too");
+  levelsForDimmers();
+  assert.equal(stepWhat(everywhere), "All dimmers");
+  assert.equal(stepWhat(room), "All dimmers");
+  assert.equal(stepWhat(off), "All lights", "off turns every light off");
+  assert.equal(stepWhat({ ...everywhere, set: { on: true } }), "All lights");
+  assert.equal(plain(sceneSummary({ steps: [room, everywhere, named] })), "Kitchen dimmers: 50% · All dimmers: 30% · 2 lights: 50%");
+});
+
+test("a run that left switches as they are is done; anything else left out still says so", async () => {
+  const switches = (count, others = []) => ({
+    ran: 2,
+    skipped: count + others.filter((problem) => problem.outcome === "skipped").length,
+    failed: 0,
+    on_off_only: count,
+    problems: [...others, ...Array.from({ length: Math.min(count, 50 - others.length) }, (_, index) => ({ step: 1, device_id: 300 + index, outcome: "skipped", code: "ON_OFF_ONLY", detail: "This light only turns on and off" }))],
+  });
+  assert.equal(resultText(switches(1)), "Done — only dimmers get a percentage; 1 switch stayed as it was");
+  assert.equal(resultText(switches(107)), "Done — only dimmers get a percentage; 107 switches stayed as they were", "all of them, not the 50 listed");
+  assert.equal(runPartial(switches(107)), false, "done, not partly");
+  const door = { step: 2, device_id: 70, outcome: "skipped", code: "DOOR_CONTROL_DISABLED", detail: "Door control is off" };
+  assert.equal(resultText(switches(3, [door])), "Done — doors and gates were skipped: Door Control is off in Composer");
+  assert.equal(runPartial(switches(3, [door])), true);
+  const ac = { step: 2, device_id: 30, outcome: "skipped", code: "MODE_NOT_SUPPORTED", detail: "No auto" };
+  assert.equal(resultText(switches(61, [ac])), "Done — 1 device was skipped", "the switches are not counted as skipped");
+  const partial = { step: 2, device_id: 41, outcome: "partial", code: "NOT_SUPPORTED", detail: "No speed 4" };
+  assert.equal(resultText(switches(2, [partial])), "Done — one setting isn’t available on every device");
+  assert.equal(runPartial(switches(2, [partial])), true);
+  // A driver that counts them only in its problems.
+  const { on_off_only: _count, ...counted } = switches(2);
+  assert.equal(resultText(counted), "Done — only dimmers get a percentage; 2 switches stayed as they were");
+  assert.equal(runPartial({ ran: 3, skipped: 0, failed: 0, problems: [] }), false);
+  assert.equal(runPartial({ ran: 3, skipped: 1, failed: 0, problems: [door] }), true);
+  try {
+    await setLanguage("he");
+    assert.equal(resultText(switches(2)), "בוצע — רק אורות עם עמעום מקבלים אחוז; 2 אורות שרק נדלקים ונכבים נשארו כמו שהיו");
+  } finally {
+    await setLanguage("en");
+  }
+});
+
+test("History says the switches a level left as they are apart from what was skipped", async () => {
+  const run = (counts) => ({ kind: "scene", action: "run", outcome: "ran", what: "Evening", counts });
+  assert.equal(outcomeText(run({ ran: 4, skipped: 107, failed: 0, on_off_only: 107 })), "Ran on 4 devices · 107 switches left as they were");
+  assert.equal(outcomeText(run({ ran: 1, skipped: 2, failed: 0, on_off_only: 1 })), "Ran on 1 device · 1 skipped · 1 switch left as it was");
+  assert.equal(outcomeText(run({ ran: 1, skipped: 1, failed: 0 })), "Ran on 1 device · 1 skipped", "a driver that does not say it");
+  try {
+    await setLanguage("he");
+    assert.match(outcomeText(run({ ran: 4, skipped: 3, failed: 0, on_off_only: 3 })), /3 אורות שרק נדלקים ונכבים נשארו כמו שהיו$/);
   } finally {
     await setLanguage("en");
   }

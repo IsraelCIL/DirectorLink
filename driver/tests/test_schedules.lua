@@ -413,6 +413,53 @@ function tests.a_scheduled_scene_leaves_doors_and_gates_alone()
     T.eq(lastRun.ran, 1)
 end
 
+-- A level for a room or the whole home goes to its dimmers only (ADR-077, 2026-10-09): a scheduled
+-- one leaves the switches as they are (the owner's heaters and door lock are KNX switches), alerts
+-- nobody, and the printout says so.
+function tests.a_scheduled_level_for_a_room_leaves_its_switches_as_they_are()
+    local runAt = at(1, 19, 0)
+    local alerts = 0
+    local mock = Mock.startDriver(nil, nil, nil, function()
+        require("src.cloud.alerts").scheduleFailed = function()
+            alerts = alerts + 1
+            return 1
+        end
+    end)
+    local admin = T.pair(mock, "Chrome on Windows")
+    local now = os.time()
+    require("src.core.clock").now = function()
+        return now
+    end
+    local Scheduler = require("src.core.scheduler")
+    local clock = { set = function(value)
+        now = value
+    end }
+    local sceneId = scene(mock, admin, { { type = "lights", room_id = 11, set = { brightness = 50 } } })
+    local created = schedule(mock, admin, { scene_id = sceneId, trigger = { type = "time", at = "19:00" }, days = { weekday(runAt) } })
+    local before = #mock.commands
+    clock.set(runAt + 10)
+    T.eq(Scheduler.tick(), 1)
+    T.eq(commandsTo(mock, 21, before), 0, "the switch stays as it is")
+    T.eq(commandsTo(mock, 22, before), 1, "the dimmer is dimmed")
+    local lastRun = T.http(mock, "GET", "/v1/schedules/" .. created.id, { key = admin }).json.last_run
+    T.same({ lastRun.ran, lastRun.skipped, lastRun.failed }, { 1, 1, 0 })
+    T.eq(alerts, 0, "nothing went wrong")
+    local entry = T.http(mock, "GET", "/v1/activity?kind=schedule", { key = admin }).json.items[1]
+    T.eq(entry.outcome, "ran")
+    T.eq(entry.counts.on_off_only, 1)
+    T.contains(mock.properties["Last Automation"], "1 device, 1 switch left as it was")
+
+    local lines = {}
+    local realPrint = print
+    _G.print = function(line)
+        lines[#lines + 1] = line
+    end
+    local ok, err = pcall(ExecuteCommand, "LUA_ACTION", { ACTION = "PRINT_AUTOMATION" })
+    _G.print = realPrint
+    T.truthy(ok, err)
+    T.contains(table.concat(lines, " | "), "all lights in Living Room (11) -> 50%, dimmers only")
+end
+
 function tests.sun_schedules_and_the_weather_view()
     local mock, admin, clock, Scheduler = start(os.time())
     local sceneId = scene(mock, admin)

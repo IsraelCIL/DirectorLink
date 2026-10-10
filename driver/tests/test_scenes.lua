@@ -575,4 +575,180 @@ function tests.turn_off_is_for_members_and_never_opens_or_turns_on_anything()
     T.eq(ok.status, 202, "doors and admin keys can do what members can")
 end
 
+-- ---- A level for a room or the whole home (ADR-077, 2026-10-09) -------------------------------
+-- A switch is a light whose driver says it only turns on and off (1.10.2). A level for a room or
+-- the whole home goes to the dimmers there and leaves the switches as they are (on the owner's
+-- home some are heaters, one a door lock): skipped, ON_OFF_ONLY. A switch a step names turns on;
+-- off, a level of 0 and on go to every light, switches too.
+
+local function sentTo(commands)
+    local byDevice = {}
+    for _, command in ipairs(commands) do
+        byDevice[command.device] = byDevice[command.device] or {}
+        table.insert(byDevice[command.device], command)
+    end
+    return byDevice
+end
+
+local DIM_50 = { command = "SET_BRIGHTNESS_TARGET", params = { LIGHT_BRIGHTNESS_TARGET = 50, RATE = 0 } }
+local PRESET_ON = { LIGHT_BRIGHTNESS_TARGET_PRESET_ID = 1 }
+local PRESET_OFF = { LIGHT_BRIGHTNESS_TARGET_PRESET_ID = 2 }
+
+-- `count` more KNX switches in the Living Room, as the owner's: proxies 301 on, drivers 401 on.
+local function withSwitches(project, count)
+    for index = 1, count do
+        local id, protocol = 300 + index, 400 + index
+        project.devices[protocol] = {
+            deviceName = "KNX Switch", driverFileName = "knx_switch.c4i", roomId = 11, roomName = "Living Room",
+            proxies = { [id] = { deviceName = "Heater " .. index, driverFileName = "light_v2.c4i" } },
+        }
+        project.devices[id] = {
+            deviceName = "Heater " .. index, driverFileName = "light_v2.c4i", roomId = 11, roomName = "Living Room",
+            protocol = { [protocol] = { deviceName = "KNX Switch", driverFileName = "knx_switch.c4i" } },
+        }
+        project.variables[id] = { [1000] = "0", [1001] = "0" }
+        project.deviceData[protocol] = { capabilities = Mock.KNX_SWITCH_CAPABILITIES }
+    end
+    return project
+end
+
+function tests.a_level_for_a_room_dims_its_dimmers_and_leaves_its_switches()
+    local mock, admin = start()
+    T.eq(T.http(mock, "GET", "/v1/lights/21", { key = admin }).json.dimmable, false, "the hall light is a switch")
+    local before = #mock.commands
+    -- Try it now.
+    local tried = T.http(mock, "POST", "/v1/scenes/try", { key = admin, body = { steps = {
+        { type = "lights", room_id = 11, set = { brightness = 50 } },
+    } } })
+    T.eq(tried.status, 202, tried.body)
+    T.eq(tried.json.ran, 1, "the desk lamp")
+    T.eq(tried.json.skipped, 1, "the hall light")
+    T.eq(tried.json.failed, 0)
+    T.eq(tried.json.on_off_only, 1)
+    T.eq(#tried.json.problems, 1)
+    local problem = tried.json.problems[1]
+    T.same({ problem.step, problem.device_id, problem.outcome, problem.code }, { 1, 21, "skipped", "ON_OFF_ONLY" })
+    T.contains(problem.detail, "only turns on and off")
+    local sent = commandsSince(mock, before)
+    T.eq(#sent, 1, "nothing goes to the switch")
+    T.same(sent[1], { device = 22, command = DIM_50.command, params = DIM_50.params })
+
+    -- A saved scene, run from the app: the same, and History says the switch stayed as it was.
+    local scene = T.http(mock, "POST", "/v1/scenes", { key = admin, body = { name = "Evening", steps = {
+        { type = "lights", room_id = 11, set = { brightness = 50 } },
+    } } }).json
+    before = #mock.commands
+    local ran = T.http(mock, "POST", "/v1/scenes/" .. scene.id .. "/run", { key = admin })
+    T.eq(ran.status, 202, ran.body)
+    T.same({ ran.json.ran, ran.json.skipped, ran.json.failed, ran.json.on_off_only }, { 1, 1, 0, 1 })
+    T.same(devicesOf(commandsSince(mock, before)), { 22 })
+    local entry = T.http(mock, "GET", "/v1/activity?kind=scene", { key = admin }).json.items[1]
+    T.eq(entry.outcome, "ran")
+    T.same(entry.counts, { ran = 1, skipped = 1, failed = 0, on_off_only = 1 })
+    T.contains(mock.properties["Last Automation"], "Evening · run from Chrome on Windows · 1 device, 1 switch left as it was")
+    T.notContains(mock.properties["Last Automation"], "skipped")
+end
+
+function tests.a_level_for_the_whole_home_dims_every_dimmer_and_leaves_every_switch()
+    local mock = Mock.startDriver(Mock.withLegacyLights(Mock.project()))
+    local admin = T.pair(mock, "Chrome on Windows")
+    local scene = T.http(mock, "POST", "/v1/scenes", { key = admin, body = { name = "Dim all", steps = {
+        { type = "lights", set = { brightness = 50 } },
+    } } }).json
+    local before = #mock.commands
+    local ran = T.http(mock, "POST", "/v1/scenes/" .. scene.id .. "/run", { key = admin }).json
+    T.same({ ran.ran, ran.skipped, ran.failed, ran.on_off_only }, { 3, 2, 0, 2 })
+    local sent = sentTo(commandsSince(mock, before))
+    T.same(sent[20], { { device = 20, command = DIM_50.command, params = DIM_50.params } }, "the KNX dimmer")
+    T.same(sent[22], { { device = 22, command = DIM_50.command, params = DIM_50.params } })
+    T.same(sent[25], { { device = 25, command = "SET_LEVEL", params = { LEVEL = 50 } } }, "a legacy dimmer")
+    T.eq(sent[21], nil, "the KNX switch stays as it is")
+    T.eq(sent[26], nil, "and the legacy switch")
+    local skipped = {}
+    for _, problem in ipairs(ran.problems) do
+        T.eq(problem.code, "ON_OFF_ONLY")
+        skipped[#skipped + 1] = problem.device_id
+    end
+    table.sort(skipped)
+    T.same(skipped, { 21, 26 })
+    -- A member the scene was chosen for runs it the same way.
+    local member = T.http(mock, "POST", "/v1/api-keys", { key = admin, body = { name = "member phone", role = "member", access = { scenes = { scene.id } } } }).json.key
+    before = #mock.commands
+    local theirs = T.http(mock, "POST", "/v1/scenes/" .. scene.id .. "/run", { key = member }).json
+    T.same({ theirs.ran, theirs.skipped, theirs.on_off_only }, { 3, 2, 2 })
+    T.eq(sentTo(commandsSince(mock, before))[21], nil)
+end
+
+function tests.a_switch_a_step_names_still_turns_on_with_a_level()
+    local mock, admin = start()
+    local before = #mock.commands
+    local tried = T.http(mock, "POST", "/v1/scenes/try", { key = admin, body = { steps = {
+        { type = "lights", device_ids = { 21 }, set = { brightness = 50 } },
+        { type = "lights", room_id = 11, device_ids = { 21, 22 }, set = { brightness = 50 } },
+    } } }).json
+    T.same({ tried.ran, tried.skipped, tried.failed }, { 3, 0, 0 })
+    T.eq(tried.on_off_only, nil)
+    T.eq(#tried.problems, 0)
+    local sent = sentTo(commandsSince(mock, before))
+    T.same(sent[21], {
+        { device = 21, command = "SET_BRIGHTNESS_TARGET", params = PRESET_ON },
+        { device = 21, command = "SET_BRIGHTNESS_TARGET", params = PRESET_ON },
+    }, "named by its id, it turns on (1.10.2)")
+    T.same(sent[22], { { device = 22, command = DIM_50.command, params = DIM_50.params } })
+end
+
+function tests.off_a_level_of_0_and_on_still_go_to_a_room_s_switches()
+    local mock, admin = start()
+    for _, case in ipairs({
+        { set = { brightness = 0 }, params = PRESET_OFF },
+        { set = { on = false }, params = PRESET_OFF },
+        { set = { on = true }, params = PRESET_ON },
+    }) do
+        local before = #mock.commands
+        local tried = T.http(mock, "POST", "/v1/scenes/try", { key = admin, body = { steps = {
+            { type = "lights", room_id = 11, set = case.set },
+        } } }).json
+        T.same({ tried.ran, tried.skipped, tried.failed }, { 2, 0, 0 }, Json.encode(case.set))
+        T.eq(tried.on_off_only, nil)
+        local sent = sentTo(commandsSince(mock, before))
+        T.same(sent[21], { { device = 21, command = "SET_BRIGHTNESS_TARGET", params = case.params } }, "the switch: " .. Json.encode(case.set))
+        T.truthy(sent[22] ~= nil, "and the dimmer")
+    end
+    -- Home's Turn off all turns switches off too.
+    local before = #mock.commands
+    local off = T.http(mock, "POST", "/v1/off", { key = admin, body = { type = "lights", device_ids = { 21, 22 } } }).json
+    T.same({ off.ran, off.skipped }, { 2, 0 })
+    T.same(sentTo(commandsSince(mock, before))[21], { { device = 21, command = "SET_BRIGHTNESS_TARGET", params = PRESET_OFF } })
+end
+
+-- The owner's home has 107 switches: a whole home's do not crowd the other problems out of the 50,
+-- and the run and History count every one.
+function tests.many_switches_left_as_they_are_are_counted_and_listed_after_the_other_problems()
+    local mock = Mock.startDriver(withSwitches(Mock.project(), 60))
+    local admin = T.pair(mock, "Chrome on Windows")
+    local scene = T.http(mock, "POST", "/v1/scenes", { key = admin, body = { name = "Movie", steps = {
+        { type = "lights", set = { brightness = 30 } },
+        { type = "climate", room_id = 11, set = { mode = "auto" } },
+    } } }).json
+    local before = #mock.commands
+    local ran = T.http(mock, "POST", "/v1/scenes/" .. scene.id .. "/run", { key = admin }).json
+    T.same({ ran.ran, ran.skipped, ran.failed, ran.on_off_only }, { 2, 62, 0, 61 }, "two dimmers; 61 switches and the AC skipped")
+    T.eq(#ran.problems, 50)
+    T.same({ ran.problems[1].step, ran.problems[1].device_id, ran.problems[1].code }, { 2, 30, "MODE_NOT_SUPPORTED" }, "the AC first")
+    for index = 2, 50 do
+        T.eq(ran.problems[index].code, "ON_OFF_ONLY")
+    end
+    for _, command in ipairs(commandsSince(mock, before)) do
+        T.truthy(command.device == 20 or command.device == 22, "only the dimmers get a command: " .. tostring(command.device))
+    end
+    local entry = T.http(mock, "GET", "/v1/activity?kind=scene", { key = admin }).json.items[1]
+    T.same(entry.counts, { ran = 2, skipped = 62, failed = 0, on_off_only = 61 })
+    T.contains(mock.properties["Last Automation"], "2 devices, 1 skipped, 61 switches left as they were")
+end
+
+function tests.the_driver_says_a_level_for_a_room_goes_to_dimmers_only()
+    local mock, admin = start()
+    T.eq(T.http(mock, "GET", "/v1/system", { key = admin }).json.features.scene_levels_dimmers_only, true)
+end
+
 return tests

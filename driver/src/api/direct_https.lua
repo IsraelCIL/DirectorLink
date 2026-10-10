@@ -232,9 +232,17 @@ local function makeKey()
         log("error", "no key made", { name = name, error = state.error })
         return false
     end
+    -- The name in the subject only: Director (OS 4.2.1) writes a subjectAltName given here as the
+    -- extension's raw text, not as DER, and Let's Encrypt refuses that CSR ("x509: invalid subject
+    -- alternative names"); a CSR with only the CN gets a certificate whose SAN is that name.
     local ok, csr, publicKey, privateKey = pcall(function()
-        return C4:GenerateCSR_ECC(DirectHttps.DIGEST, DirectHttps.CURVE, "/CN=" .. name, { subjectAltName = "DNS:" .. name })
+        return C4:GenerateCSR_ECC(DirectHttps.DIGEST, DirectHttps.CURVE, "/CN=" .. name)
     end)
+    if not ok then
+        ok, csr, publicKey, privateKey = pcall(function()
+            return C4:GenerateCSR_ECC(DirectHttps.DIGEST, DirectHttps.CURVE, "/CN=" .. name, {})
+        end)
+    end
     if not ok or not isText(csr) then
         state.error = "the key could not be made: " .. short(ok and publicKey or csr)
         log("error", "no key made", { name = name, error = state.error })

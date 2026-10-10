@@ -134,7 +134,8 @@ function tests.allowed_makes_a_name_key_and_csr_once_and_keeps_them_across_reloa
     T.eq(call.digest, "SHA256")
     T.eq(call.curve, "prime256v1")
     T.eq(call.subject, "/CN=" .. name)
-    T.eq(call.extensions.subjectAltName, "DNS:" .. name)
+    -- No subjectAltName: Director writes it as raw text, which Let's Encrypt refuses.
+    T.eq(call.extensions == nil or next(call.extensions) == nil, true)
     T.eq(current.enabled, true)
     T.eq(current.state, "waiting_for_certificate")
     T.contains(current.csr, "-----BEGIN CERTIFICATE REQUEST-----")

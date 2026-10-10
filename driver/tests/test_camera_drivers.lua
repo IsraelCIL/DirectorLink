@@ -169,6 +169,19 @@ function tests.labels_times_and_events_are_read_as_drivers_write_them()
         T.eq(Camera.detection(label), what, label)
     end
     T.eq(Camera.detection(nil), "other")
+    -- The sounds a camera hears (1.11.0, ADR-080), as the DirectorLink · UniFi Protect driver names
+    -- them (its AUDIO_LABELS), and as others may write them.
+    for label, what in pairs({
+        ["Smoke alarm"] = "smoke_alarm", ["CO alarm"] = "co_alarm", ["Siren"] = "siren", ["Baby crying"] = "baby_crying",
+        ["Speech"] = "speech", ["Barking"] = "barking", ["Burglar alarm"] = "burglar_alarm", ["Car horn"] = "car_horn",
+        ["Glass break"] = "glass_break",
+        ["SMOKE_ALARM"] = "smoke_alarm", ["SmokeAlarm"] = "smoke_alarm", ["smoke-alarm"] = "smoke_alarm", [" CO Alarm "] = "co_alarm",
+        ["co_alarm"] = "co_alarm", ["BabyCrying"] = "baby_crying", ["GLASS-BREAK"] = "glass_break", ["car_horn"] = "car_horn",
+        -- One label, as the agreement says: several, or a word alone, is no label.
+        ["Smoke"] = "other", ["CO"] = "other", ["Smoke alarm, Siren"] = "other", ["Glass"] = "other", ["Sound"] = "other",
+    }) do
+        T.eq(Camera.detection(label), what, label)
+    end
 
     local Clock = require("src.core.clock")
     T.eq(Clock.parseIso("1970-01-01T00:00:00Z"), 0)

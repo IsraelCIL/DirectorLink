@@ -18,11 +18,16 @@ local TYPES = {
     other = true,
 }
 
--- A device as the caller sees it: `part_of` names only a device they see too (ADR-054).
+-- A device as the caller sees it: `part_of` names only a device they see too (ADR-054), and
+-- `part_of_music` (1.11.0, ADR-080) is for those who have Music there (a kind a member is given).
 local function view(ctx, registry, device)
-    local item = Views.device(registry, device)
+    local sonosEnabled = ctx.services.sonosEnabled
+    local item = Views.device(registry, device, sonosEnabled ~= nil and sonosEnabled() == true)
     if item.part_of ~= Json.null and not Access.canSee(ctx.apiKey, registry.getDevice(item.part_of)) then
         item.part_of = Json.null
+    end
+    if item.part_of_music and not Access.canSee(ctx.apiKey, { id = device.id, kind = "music", room_id = device.room_id }) then
+        item.part_of_music = false
     end
     return item
 end

@@ -38,7 +38,8 @@ export const ALERT_LABEL = "DirectorLink alert v1";
 // What the controller alerts about, in the order Settings lists them; offline is the servers' own.
 export const ALERT_KINDS = ["doorbell", "camera", "door_opened", "fridge_door", "schedule_failed"];
 // What a camera alert can say it saw (the labels of DirectorLink's camera agreement, ADR-065, and
-// the DirectorLink · Hikvision Camera driver's detections, ADR-056); anything else is "other".
+// the DirectorLink · Hikvision Camera driver's detections, ADR-056; since 1.11.0 the sounds a camera
+// hears, ADR-080); anything else is "other".
 export const CAMERA_DETECTIONS = [
   "person",
   "vehicle",
@@ -57,6 +58,15 @@ export const CAMERA_DETECTIONS = [
   "object_removed",
   "alarm_input",
   "pir",
+  "smoke_alarm",
+  "co_alarm",
+  "siren",
+  "baby_crying",
+  "speech",
+  "barking",
+  "burglar_alarm",
+  "car_horn",
+  "glass_break",
   "other",
 ];
 const TIMEOUT_MS = 10000;

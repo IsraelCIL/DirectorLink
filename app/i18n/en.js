@@ -1336,6 +1336,16 @@ export default {
       object_removed: "Object removed",
       alarm_input: "Alarm input",
       pir: "Motion (PIR)",
+      // Sounds a camera hears (1.11.0, ADR-080): "Smoke alarm at Garden at 21:14."
+      smoke_alarm: "Smoke alarm",
+      co_alarm: "CO alarm",
+      siren: "Siren",
+      baby_crying: "Baby crying",
+      speech: "Someone talking",
+      barking: "Dog barking",
+      burglar_alarm: "Burglar alarm",
+      car_horn: "Car horn",
+      glass_break: "Glass breaking",
       other: "Alert",
     },
     settings: {
@@ -1347,7 +1357,7 @@ export default {
       help: "A notification on this device, also when the app is closed. What it says is sealed for this device: DirectorLink’s servers can’t read it.",
       helpAdmins: "A notification when the home has been offline for 10 minutes, or when a schedule had a problem. For admins; an alert never names a room, device or schedule.",
       kindsTitle: "What to alert about",
-      cameraHelp: "Off at first: cameras can be busy. What each camera alerts about is set in its driver in Control4 (on the Hikvision drivers, its Alert On); at most one a minute per camera.",
+      cameraHelp: "Off at first: cameras can be busy. What each camera alerts about is set in its driver in Control4 (on the Hikvision drivers, its Alert On); at most one a minute per camera, but a smoke or CO alarm comes even right after another alert.",
       kinds: {
         offline: "The home is offline for 10 minutes",
         device_requests: "A new device of mine asks to join",

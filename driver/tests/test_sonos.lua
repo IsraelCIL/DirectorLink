@@ -1341,4 +1341,55 @@ function tests.a_new_sonos_address_is_tried_at_once()
     T.eq(#music(mock, key).items, 3)
 end
 
+
+-- ---- Control4's own Sonos drivers (1.11.0, ADR-080) ---------------------------------------------
+
+-- In a project that also has Control4's Sonos drivers, their proxies are the same players Music
+-- shows: while DirectorLink plays Sonos itself (Sonos On), /v1/devices still lists them, as devices
+-- it does not control, and says they are part of Music (`part_of_music`), so apps leave them out of
+-- a room's other devices; for those who have Music. With Sonos Off, devices of their own, as before.
+function tests.control4_sonos_drivers_are_part_of_music_while_directorlink_plays_sonos()
+    local mock, home, key = start({ project = Mock.withControl4Sonos(project()) })
+    discover(mock, home)
+    local function parts(apiKey)
+        local found = {}
+        for _, item in ipairs(T.http(mock, "GET", "/v1/devices", { key = apiKey or key }).json.items) do
+            found[item.id] = item.part_of_music
+        end
+        return found
+    end
+    local all = parts()
+    T.eq(all[84], true, "Control4's Sonos Network (sonosNetwork.c4z)")
+    T.eq(all[85], true, "a player of Control4's sonos.c4z")
+    T.eq(all[86], true, "a copy of it, in another case")
+    T.eq(all[87], true, "a Sonos driver that is its own device")
+    T.eq(all[88], false, "Sonance is not Sonos")
+    T.eq(all[40], false, "another device DirectorLink does not control")
+    T.eq(all[90], false, "a DoorBird's button: part of its doorbell, not of Music")
+    T.eq(all[20], false, "a light")
+    -- Still in /v1/devices, as before, for scripts.
+    local kitchen = T.http(mock, "GET", "/v1/devices/85", { key = key }).json
+    T.same({ kitchen.type, kitchen.supported, kitchen.part_of_music, kitchen.room.id }, { "other", false, true, 10 })
+    T.truthy(isNull(kitchen.part_of))
+    local others = T.http(mock, "GET", "/v1/devices?supported=false&room_id=11", { key = key }).json.items
+    T.eq(#others, 3, "Living Room Sonos, Sonos Line In and Sonance Amp")
+
+    -- A member who was not given Music: devices of their own there.
+    local member = createKey(mock, key, "member")
+    T.eq(parts(member)[85], true, "a member of 1.7.0 has every kind")
+    local profile = T.http(mock, "GET", "/v1/api-keys/current", { key = member }).json.profile_id
+    local kinds = { light = true, climate = true, fan = true, blind = true, music = false, refrigerator = true }
+    T.eq(T.http(mock, "PATCH", "/v1/profiles/" .. profile .. "/access", { key = key, body = { kinds = kinds } }).status, 200)
+    T.eq(parts(member)[85], false, "no Music for them")
+    T.eq(T.http(mock, "GET", "/v1/devices/85", { key = member }).json.part_of_music, false)
+
+    -- Sonos Off: as before.
+    Properties["Sonos"] = "Off"
+    OnPropertyChanged("Sonos")
+    all = parts()
+    for _, id in ipairs({ 84, 85, 86, 87 }) do
+        T.eq(all[id], false, id)
+    end
+end
+
 return tests

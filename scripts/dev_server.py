@@ -53,6 +53,10 @@ join the project: 71 "Main Gate" (a gate whose controller, driver 161, drives th
 and has a contact), 72 "Garage Door" (driver 162, two relays, no contact), the KNX relay 75 "Back Door
 Relay" as the door of controller 163, and 74 "Side Gate" (nothing bound, not listed). "event 161 1"
 is the gate's controller saying Opened, "event 161 2" Closed, "event 161 3" Partial.
+With --control4-sonos (1.11.0, ADR-080), Control4's own Sonos drivers join the project: 84 "Sonos
+Network" and 85 "Kitchen Sonos" in the Kitchen, 86 "Living Room Sonos" and 87 "Sonos Line In" in the
+Living Room, and 88 "Sonance Amp" (not Sonos). With Sonos On they are part of Music, not other devices
+of their rooms ("sonos on" and "sonos off" switch it).
 """
 
 import argparse
@@ -166,7 +170,7 @@ class FakeCameras:
 class Bridge:
     """One Lua process running the driver; requests are serialized because the driver is single-threaded."""
 
-    def __init__(self, lua, spec_path, sonos_port=None, cameras=0, camera_ms=150, agreement=False, doors=False, fahrenheit=False):
+    def __init__(self, lua, spec_path, sonos_port=None, cameras=0, camera_ms=150, agreement=False, doors=False, fahrenheit=False, control4_sonos=False):
         # Fake Sonos players on this port (tests/sonos/fake-sonos.mjs): the driver's requests to
         # players reach them through _fetch.
         self.sonos_port = sonos_port
@@ -183,6 +187,8 @@ class Bridge:
             arguments.append("agreement")
         if doors:
             arguments.append("doors")
+        if control4_sonos:
+            arguments.append("c4sonos")
         if fahrenheit:
             arguments.append("fahrenheit")
         self.process = subprocess.Popen(
@@ -426,6 +432,7 @@ def main():
     parser.add_argument("--cameras", type=int, default=0, metavar="N", help="N fake cameras on the DirectorLink · Hikvision Camera driver instead of the two plain ones")
     parser.add_argument("--agreement-cameras", action="store_true", help="two cameras of DirectorLink's camera agreement: 67 Porch (a camera, driver 157) and 68 Entrance (a doorbell, driver 158)")
     parser.add_argument("--door-controllers", action="store_true", help="Relay Door, Gate and Garage Door Controllers: 71 Main Gate (driver 161), 72 Garage Door (162), the KNX relay 75 as door controller 163's door")
+    parser.add_argument("--control4-sonos", action="store_true", help="Control4's own Sonos drivers: 84 Sonos Network and 85 Kitchen Sonos (Kitchen), 86 Living Room Sonos and 87 Sonos Line In (Living Room), and 88 Sonance Amp; part of Music with Sonos On")
     parser.add_argument("--camera-ms", type=int, default=150, metavar="MS", help="how long a fake camera takes for a picture (default 150)")
     parser.add_argument("--latency", type=int, default=0, metavar="MS", help="a round trip added to every request, as the account's relay adds")
     parser.add_argument("--fahrenheit", action="store_true", help="a US home: Composer's scale and every thermostat in °F, with the thermostats of issue #75")
@@ -434,7 +441,7 @@ def main():
         sys.exit("Lua 5.1 not found; install it or pass --lua")
 
     spec = ROOT / "dist" / "openapi.json"
-    bridge = Bridge(args.lua, spec if spec.is_file() else None, args.sonos, args.cameras, args.camera_ms, args.agreement_cameras, args.door_controllers, args.fahrenheit)
+    bridge = Bridge(args.lua, spec if spec.is_file() else None, args.sonos, args.cameras, args.camera_ms, args.agreement_cameras, args.door_controllers, args.fahrenheit, args.control4_sonos)
     if args.jewish_calendar:
         bridge.set_property("Jewish Calendar", "On")
     if args.sonos:
@@ -454,6 +461,8 @@ def main():
             print('Agreement cameras: 67 Porch (driver 157) and the doorbell 68 Entrance (driver 158); "ring 158" rings it')
         if args.door_controllers:
             print('Door controllers: 71 Main Gate (driver 161), 72 Garage Door (162), 75 Back Door Relay (163); "event 161 1" opens the gate in Control4')
+        if args.control4_sonos:
+            print("Control4's Sonos drivers: 84 Sonos Network, 85 Kitchen Sonos, 86 Living Room Sonos, 87 Sonos Line In (part of Music with Sonos On); 88 Sonance Amp")
         if args.latency:
             print(f"Latency: {args.latency} ms a round trip")
         if args.fahrenheit:

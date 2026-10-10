@@ -35,6 +35,14 @@ function Classifier.relayController(driverFileName)
     return RELAY_CONTROLLERS[name] or RELAY_CONTROLLERS[(name:gsub(" %(%d+%)%.c4z$", ".c4z"))]
 end
 
+-- A Sonos driver of the project (1.11.0, ADR-080): Control4's own, "Works With Sonos Certified"
+-- (sonos.c4z, a Sonos player; sonosNetwork.c4z, the household; sonosGlobalLineIn.c4z), their
+-- copies ("sonos (1).c4z") and any other driver with Sonos in its file name. DirectorLink plays the
+-- same players itself (Music, ADR-044), so their proxies are part of Music, not other devices.
+function Classifier.isSonosDriver(driverFileName)
+    return normalizedDriverName(driverFileName):find("sonos", 1, true) ~= nil
+end
+
 function Classifier.classify(driverFileName)
     local name = normalizedDriverName(driverFileName)
 

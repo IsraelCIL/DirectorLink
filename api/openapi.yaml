@@ -5672,7 +5672,7 @@ components:
 
     Device:
       type: object
-      required: [id, name, type, room, supported, href, part_of]
+      required: [id, name, type, room, supported, href, part_of, part_of_music]
       properties:
         id:
           type: integer
@@ -5700,6 +5700,16 @@ components:
             intercom or camera (its doorbell). Null otherwise, and when the caller does not see that
             device. Apps leave such a device out of a room's devices they cannot control. A driver
             before 1.10.1 sends no `part_of`: read it as null.
+        part_of_music:
+          type: boolean
+          description: |
+            Since 1.11.0 (ADR-080): true for a device this API does not control (`supported` false)
+            whose Control4 driver is a Sonos driver (its file name has "sonos" in it, any case:
+            Control4's `sonos.c4z`, `sonosNetwork.c4z` and `sonosGlobalLineIn.c4z` among them),
+            while DirectorLink plays Sonos itself (Composer's Sonos On, `features.sonos`): the same
+            players are in Music (`/v1/music`). Apps leave such a device out of a room's devices they
+            cannot control; it is still listed here. False otherwise, with Sonos Off, and for a caller
+            who was not given music. A driver before 1.11.0 sends no `part_of_music`: read it as false.
 
     DeviceList:
       type: object
@@ -7038,7 +7048,7 @@ components:
               type: boolean
             camera:
               type: boolean
-              description: "A camera saw someone or something (1.8.0, ADR-056; ADR-065): its driver's own alert, as its settings let it through (the Hikvision drivers: the camera's Alert On, the hub's alerts switch and its snooze); at most one a camera a minute. Off until chosen."
+              description: "A camera saw someone or something (1.8.0, ADR-056; ADR-065): its driver's own alert, as its settings let it through (the Hikvision drivers: the camera's Alert On, the hub's alerts switch and its snooze); at most one a camera a minute, but a smoke or CO alarm it heard (1.11.0, ADR-080) is not held back by its other alerts. Off until chosen."
             door_opened:
               type: boolean
             fridge_door:

@@ -3,7 +3,7 @@
 
 import { t } from "./i18n.js";
 import { ringIsRecent } from "./rings.js";
-import { notify, state } from "./state.js";
+import { can, findDevice, notify, state } from "./state.js";
 
 const DISMISSED_PREFIX = "directorlink.doorbellDismissed.";
 const NOTIFY_KEY = "directorlink.doorbellNotifications";
@@ -126,9 +126,23 @@ export function disableNotifications() {
   notify();
 }
 
+// Where the browser shows a notification's buttons: "Open <door>…" for each door at the doorbell this
+// user may open (1.11.0, ADR-078; as sw.js does for the alert). Each opens the doorbell's screen.
+function ringActions(doorbell) {
+  const most = Math.min(Number(globalThis.Notification?.maxActions) || 0, 2);
+  if (most < 1 || !can("doors") || !Array.isArray(doorbell.doors)) return [];
+  return doorbell.doors
+    .filter((item) => item.can_open === true)
+    .map((item) => findDevice("relay", item.id))
+    .filter(Boolean)
+    .slice(0, most)
+    .map((door) => ({ action: `door-${door.id}`, title: t("alerts.openDoorAction", { name: door.name }) }));
+}
+
 // A notification for each ring while the app is open but not in front (the banner shows it
 // otherwise). With the app closed, the controller's alert says it (Web Push, ADR-050, sw.js), with
-// the same tag; a ring that alert shows already is not shown again.
+// the same tag; a ring that alert shows already is not shown again. Its tap opens the doorbell's
+// screen (1.11.0).
 export async function notifyRings(doorbells) {
   if (!doorbells.length || !notificationsOn()) return;
   if (!document.hidden && document.hasFocus()) return;
@@ -139,20 +153,21 @@ export async function notifyRings(doorbells) {
       tag: `doorbell-${doorbell.id}`,
       renotify: true,
       icon: "/icons/icon-192.png",
-      data: { url: "/#/", ring: doorbell.last_ring_at },
+      data: { url: `/#/doorbell/${doorbell.id}`, ring: doorbell.last_ring_at },
     };
+    const actions = ringActions(doorbell);
     try {
       // Installed apps and Android need the service worker to show notifications.
       const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
       if (registration?.showNotification) {
         const shown = registration.getNotifications ? await registration.getNotifications({ tag: options.tag }).catch(() => []) : [];
-        if (!shown.some((item) => item.data?.ring === doorbell.last_ring_at)) await registration.showNotification(title, options);
+        if (!shown.some((item) => item.data?.ring === doorbell.last_ring_at)) await registration.showNotification(title, actions.length ? { ...options, actions } : options);
         continue;
       }
       const notification = new Notification(title, options);
       notification.onclick = () => {
         window.focus();
-        window.location.hash = "#/";
+        window.location.hash = `#/doorbell/${doorbell.id}`;
         notification.close();
       };
     } catch (error) {

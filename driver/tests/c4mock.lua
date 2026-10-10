@@ -875,6 +875,18 @@ function Mock.withRelayControllers(project, list)
     return project
 end
 
+-- A gate at a doorbell camera of the camera agreement (1.11.0, ADR-078), as on the owner's
+-- controller (the Relay Gate Controller 530, its button 531, whose Open/Toggle relay is bound to the
+-- DirectorLink · DoorBird driver 761's relay connection "Relay 1"; 761's camera 763 is a doorbell):
+-- by default 76 "Entrance Gate" (Kitchen; driver 166, gate_relay_control.c4z, one relay, no contact)
+-- on the driver 158 of 68 "Entrance" (Mock.withAgreementCameras). `gate`: as an item of
+-- Mock.withRelayControllers' list.
+function Mock.withDoorbellGate(project, gate)
+    return Mock.withRelayControllers(project, {
+        gate or { id = 76, controller = 166, name = "Entrance Gate", room = 10, kind = "gate", state = "Unknown", bindings = { [1] = 158 } },
+    })
+end
+
 -- A door controller's state changes as its driver does it: STATE, then the event of that state
 -- (Opened 1, Closed 2, Partial 3, Unknown 4). Returns how many registrations heard the event.
 Mock.CONTROLLER_EVENTS = { Opened = 1, Closed = 2, Partial = 3, Unknown = 4 }

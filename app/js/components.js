@@ -19,6 +19,7 @@ import {
   stopBlind,
 } from "./controls.js";
 import { dismissRing, doorbellCamera, ringTime } from "./doorbells.js";
+import { doorButtons, doorNote, doorsAt, doorsKnown } from "./doorbell-doors.js";
 import { h, iconButton, name } from "./dom.js";
 import { fanLevel, fanSpeeds, levelChange } from "./fans.js";
 import { isFavorite, toggleFavorite } from "./favorites.js";
@@ -772,13 +773,15 @@ export function doorbellButton(doorbell, { compact = false, large = false } = {}
   );
 }
 
-function doorbellActions(doorbell, { large = false, extra = null } = {}) {
+// `doors`: the "Open <door>" buttons of the doors at it (1.11.0, ADR-078), first.
+function doorbellActions(doorbell, { large = false, extra = null, doors = [] } = {}) {
   const confirming = ui.doorbellStage[doorbell.id] === "confirm";
   const button = doorbellButton(doorbell, { large });
-  if (!button && !extra) return null;
+  if (!button && !extra && !doors.length) return null;
   return h(
     "div",
     { class: "relay-actions" },
+    doors,
     button,
     confirming
       ? h(
@@ -856,6 +859,15 @@ export function doorbellCard(doorbell, { openCamera } = {}) {
     ),
     doorbellPicture(doorbell, { width: 640, openCamera }),
     doorbellActions(doorbell),
+    // Its screen (1.11.0, ADR-078): the doors at it, opened from there, and an admin's links.
+    doorsKnown(doorbell) && (doorsAt(doorbell).length || can("admin"))
+      ? h(
+          "a",
+          { class: "button button-quiet button-small doorbell-screen-link", href: `#/doorbell/${doorbell.id}`, dataset: { key: `doorbell:${doorbell.id}:screen` } },
+          icon("door"),
+          h("span", {}, t("doorbells.screenLink"))
+        )
+      : null,
     doorbellEvents(doorbell),
     inlineError(deviceKey("doorbell", doorbell.id))
   );
@@ -889,9 +901,11 @@ export function doorbellBanner(doorbell, { openCamera } = {}) {
       )
     ),
     doorbellPicture(doorbell, { width: 640, live: true, openCamera }),
-    doorbellActions(doorbell, { large: true, extra: dismiss }),
-    doorbell.can_open && !can("doors") ? h("p", { class: "ring-note" }, t("doorbells.noAccess")) : null,
-    inlineError(deviceKey("doorbell", doorbell.id))
+    // "Open <door>" for each door at it this user may open (1.11.0, ADR-078), the doorbell's own Open.
+    doorbellActions(doorbell, { large: true, extra: dismiss, doors: doorButtons(doorbell, { place: "banner" }) }),
+    doorNote(doorbell) ? h("p", { class: "ring-note" }, doorNote(doorbell)) : null,
+    inlineError(deviceKey("doorbell", doorbell.id)),
+    doorsAt(doorbell).map((item) => inlineError(deviceKey("relay", item.id)))
   );
 }
 

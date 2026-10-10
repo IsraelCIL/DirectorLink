@@ -86,6 +86,8 @@ export const ui = {
   find: null, // Find my controller on the pairing screen (views/find.js): { stage, range, controllers }
   relayStage: {}, // door/gate Open button: relayId -> "confirm" | "sending" | "sent"
   doorbellStage: {}, // doorbell Open gate button: doorbellId -> "confirm" | "sending" | "sent"
+  doorbellLinks: null, // a doorbell's screen, an admin linking doors (1.11.0): { id, busy, message, choice }
+  ringCamera: null, // a ring's screen opened by its notification: { doorbell, camera } asked for before the doorbells are read
   featuredCamera: null, // Cameras tab: id of the large picture
   dragging: false, // a slider thumb is held: redraws wait
   reordering: false, // Settings → Rooms: a room is being moved (views/settings.js): redraws wait

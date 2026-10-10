@@ -372,6 +372,23 @@ export default {
     },
     notificationTitle: "Someone is at the door",
     notificationBody: "{name} rang.",
+    // A doorbell's doors and its own screen (1.11.0, ADR-078).
+    openDoor: "Open {name}",
+    screenTitle: "Doorbell",
+    screenLink: "Doorbell screen",
+    notFoundTitle: "Doorbell not found",
+    notFoundText: "It may have been removed from the Control4 project.",
+    links: {
+      title: "Doors and gates at this doorbell",
+      help: "When it rings, its screen and Home’s banner show Open for each, to whoever may open that door. A gate whose controller is on the doorbell’s own relay is here by itself.",
+      automatic: "On the doorbell’s relay",
+      manual: "Added here",
+      none: "No door or gate here yet.",
+      add: "Add a door or gate",
+      addButton: "Add",
+      remove: "Remove",
+      removeLabel: "Remove {name} from this doorbell",
+    },
   },
   // The alarm, read-only (ADR-038): for members and admins, once the installer turned it on.
   alarm: {
@@ -1302,6 +1319,8 @@ export default {
     scheduleFailedNamed: "{home} – the schedule for {name} had a problem at {time}. Open the app to see what happened.",
     other: "{home} – something needs your attention. Open the app to see what happened.",
     doorbell: "{name} rang at {time}.",
+    // A ring's button where the browser shows them (1.11.0): it opens the doorbell's screen.
+    openDoorAction: "Open {name}…",
     doorOpened: "{name} was opened by {who} at {time}.",
     doorOpenedScene: "{name} was opened by {who}, with the scene {scene}, at {time}.",
     doorOpenedControl4: "{name} was opened in Control4 at {time}.",
@@ -1542,6 +1561,7 @@ export default {
     linkGone: "The scene was deleted",
     answered: "Answering the link “{label}”",
     answeredUnnamed: "Answering an ask-before-opening link",
+    fromDoorbell: "From the doorbell {name}",
   },
   palettes: {
     graphite: "Graphite",
@@ -1939,6 +1959,7 @@ export default {
       roomOrder: "Rooms in the home’s order",
       sonosRooms: "Sonos players with a room chosen",
       sceneLinks: "Scenes with a link for automations",
+      doorbellDoors: "Doors and gates added to doorbells",
       yoursAdded: "This device keeps its access (it was paired after the backup was made).",
       keysKept: "Keys: kept as they are now. Every device keeps the access it has now, and none of the backup’s keys comes back, so a device removed since stays out.",
       keysBack: "Keys that come back",
@@ -1999,6 +2020,7 @@ export default {
       roomNames: "room names",
       roomOrder: "the room order",
       sonosRoom: "the Sonos player “{name}”",
+      doorbellDoors: "the doors at the doorbell “{name}”",
       personRooms: "{name}’s rooms",
       hiddenRooms: "the rooms hidden from members",
     },

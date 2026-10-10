@@ -51,14 +51,56 @@ async function refreshOfflineStatus() {
   notify();
 }
 
+// Where a notification's tap leads (sw.js): the worker tells an open app, and also keeps it for a
+// minute in Cache Storage (1.11.0, ADR-078), so that an app it opened, or one that was asleep when
+// told (a Home Screen app on iPhone), still lands there: a ring's on its doorbell's screen. Taken
+// once.
+const OPEN_CACHE = "directorlink-alerts"; // js/alerts.js TEXTS_CACHE, sw.js ALERT_TEXTS_CACHE
+const OPEN_PATH = "/notification-open.json";
+const OPEN_FRESH_MS = 60 * 1000;
+
+function openAt(url) {
+  let target;
+  try {
+    target = new URL(url, window.location.href);
+  } catch {
+    return;
+  }
+  if (target.origin !== window.location.origin) return;
+  const hash = target.hash || "#/";
+  if (window.location.hash !== hash) window.location.hash = hash;
+}
+
+export async function takeNotificationOpen(now = Date.now()) {
+  if (typeof caches === "undefined") return false;
+  try {
+    const cache = await caches.open(OPEN_CACHE);
+    const saved = await cache.match(OPEN_PATH);
+    if (!saved) return false;
+    const value = await saved.json().catch(() => null);
+    await cache.delete(OPEN_PATH);
+    const at = Number(value?.at);
+    if (typeof value?.url !== "string" || !Number.isFinite(at) || now - at > OPEN_FRESH_MS || at - now > OPEN_FRESH_MS) return false;
+    openAt(value.url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function startPwa() {
   if ("serviceWorker" in navigator) {
-    // A doorbell notification was clicked: show Home, where the banner is.
+    // A notification was clicked: show where it leads (a ring: its doorbell's screen).
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "directorlink-open") {
-        const hash = new URL(event.data.url, window.location.href).hash || "#/";
-        if (window.location.hash !== hash) window.location.hash = hash;
+        openAt(event.data.url);
+        takeNotificationOpen();
       }
+    });
+    // Opened by a notification's tap, or back in front after one.
+    takeNotificationOpen();
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) takeNotificationOpen();
     });
     navigator.serviceWorker
       .register("/sw.js", { scope: "/" })

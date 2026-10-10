@@ -41,7 +41,7 @@ local STORE_VERSION = 1
 local TEXTS = { "what", "room", "via", "outcome", "reason", "note", "from", "to" }
 local NUMBERS = { "count", "seconds", "more" }
 local COUNTS = { "ran", "skipped", "failed" }
-local IDS = { "scene_id", "schedule_id", "device_id", "key_id", "room_id", "invitation_id", "link_id" }
+local IDS = { "scene_id", "schedule_id", "device_id", "key_id", "room_id", "invitation_id", "link_id", "doorbell_id" }
 local CHANGE_TEXTS = { "change", "type", "name", "room", "from" }
 -- control4: a door or gate opened that DirectorLink did not open (1.7.0, ADR-050).
 -- `link` (1.7.0, ADR-051): a scene run by its link, from a phone's automation.

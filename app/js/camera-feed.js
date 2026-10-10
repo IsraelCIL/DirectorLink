@@ -118,6 +118,20 @@ function picture(camera, width, { first = false, wanted = null } = {}) {
   return promise;
 }
 
+// A picture asked for before the cameras are read (1.11.0, ADR-078: a doorbell's screen opened by its
+// ring's notification, views/doorbell.js): first in line, and every tile of it shows it as it comes.
+export function prefetchPicture(cameraId, width) {
+  const id = Number(cameraId);
+  if (!Number.isInteger(id) || id < 1) return Promise.resolve(null);
+  const key = `${id}:${width}`;
+  return picture({ id, snapshot_href: `/v1/cameras/${id}/snapshot` }, width, { first: true })
+    .then((url) => {
+      if (url) for (const image of tilesOf(key)) image.src = url;
+      return url;
+    })
+    .catch(() => null);
+}
+
 function bestPicture(cameraId, width) {
   const exact = pictures.get(`${cameraId}:${width}`);
   if (exact) return exact;

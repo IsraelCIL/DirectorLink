@@ -39,6 +39,7 @@ local SonosRooms = require("src.sonos.rooms")
 local Activity = require("src.core.activity")
 local AutoBackup = require("src.cloud.auto_backup")
 local Alerts = require("src.cloud.alerts")
+local DoorbellDoors = require("src.core.doorbell_doors")
 
 local LIFECYCLE_KEYS = {
     reload_count = "directorlink_reload_count",
@@ -580,6 +581,8 @@ function OnDriverLateInit(driverInitType)
     Log.info("auth", "accounts of the keys loaded", { keys = Accounts.load() })
     FavoritesGone.load()
     SonosRooms.load()
+    -- The doors an admin linked to a doorbell (1.11.0, ADR-078).
+    Log.info("doorbell", "doors linked to doorbells loaded", { doorbells = DoorbellDoors.load() })
     AutoBackup.load()
     -- Only with a key store read in full: after a failed read, keys may come back at the next start.
     if Keys.complete() then

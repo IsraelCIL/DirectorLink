@@ -583,7 +583,7 @@ export function setStage(map, id, stage, clearAfter) {
   notify();
 }
 
-async function pressOpen({ map, kind, id, path, onDone }) {
+async function pressOpen({ map, kind, id, path, body, onDone }) {
   const stage = ui[map][id];
   if (stage === "sending" || !can("doors")) {
     return;
@@ -595,7 +595,7 @@ async function pressOpen({ map, kind, id, path, onDone }) {
   }
   setStage(map, id, "sending");
   try {
-    const result = await api(path, { method: "POST" });
+    const result = await api(path, body ? { method: "POST", body } : { method: "POST" });
     if (onDone) onDone(result);
     setStage(map, id, "sent", 3000);
   } catch (error) {
@@ -613,8 +613,11 @@ export function cancelRelay(relay) {
   setStage("relayStage", relay.id, null);
 }
 
-export function pressRelay(relay) {
-  return pressOpen({ map: "relayStage", kind: "relay", id: relay.id, path: `/v1/relays/${relay.id}/pulse` });
+// `doorbell`: opened from that doorbell's ring screen or banner (1.11.0, ADR-078): the door's own
+// Open all the same, which History says came from the doorbell.
+export function pressRelay(relay, { doorbell = null } = {}) {
+  const body = Number.isInteger(doorbell?.id) ? { doorbell: doorbell.id } : undefined;
+  return pressOpen({ map: "relayStage", kind: "relay", id: relay.id, path: `/v1/relays/${relay.id}/pulse`, body });
 }
 
 export function cancelDoorbell(doorbell) {

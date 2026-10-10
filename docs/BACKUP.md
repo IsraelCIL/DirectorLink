@@ -90,7 +90,8 @@ Composer. A file must never switch a safety setting on.
     "remote_identity": { "version": 1, "linked": true, "home_id": "…", "home_secret": "…" },
     "sonos_rooms": { "version": 1, "rooms": { "RINCON_…": { "room_id": 10, "name": "Kitchen" } } },
     "scene_links": { "version": 1, "links": [{ "id": "…", "scene_id": "…", "alg": "sha256", "hash": "…", "home": "…", "by": "…" }] },
-    "people": { "version": 1, "people": { "…": { "role": "member", "all_rooms": false, "rooms": [10], "...": "..." } }, "owner": "…", "hidden_rooms": [] }
+    "people": { "version": 1, "people": { "…": { "role": "member", "all_rooms": false, "rooms": [10], "...": "..." } }, "owner": "…", "hidden_rooms": [] },
+    "doorbell_doors": { "version": 1, "links": { "68": [70] } }
   }
 }
 ```
@@ -114,6 +115,14 @@ backup's, when it moves here; else this controller's), and whose key is among th
 that `replaces_key` names passes its links to the restoring device's key). So the family's NFC tags
 and Shortcuts keep working after a replaced controller is restored with its identity. The preview
 counts them (`counts.scene_links`).
+
+`doorbell_doors` (1.11.0, ADR-078) holds the doors and gates an admin added at a doorbell (doorbell
+id to door ids); the gates DirectorLink finds on a doorbell's own relay are not in it (they follow the
+project). Each doorbell and door comes back only onto the device with the same id and the same name,
+as every door (below): a gate is never shown at another doorbell, nor another door at this one.
+What matches nothing is left out and listed (`used_in` `doorbell_doors`, with the doorbell's name).
+The preview counts the doors that stay (`counts.doorbell_doors`); a backup made before 1.11.0 has
+none (null), and the links on the controller stay as they are.
 
 `people` (1.8.0, ADR-054) holds each user's role and permissions by profile id, the home's owner
 and the rooms hidden from members. It follows the keys too: when the backup's keys come back, its

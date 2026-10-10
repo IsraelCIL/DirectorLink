@@ -526,6 +526,21 @@ def scenario(client, bridge):
     if {"id": 68, "type": "doorbell"} not in [{"id": item["id"], "type": item["type"]} for item in client.check("GET", "/v1/devices?type=doorbell", 200)["items"]]:
         fail("GET /v1/devices?type=doorbell should list the doorbell camera as a doorbell")
     client.check("POST", "/v1/doorbells/68/open", 409)
+    # The doorbell's gate (1.11.0, ADR-078): the dev bridge's 76 Entrance Gate, a Relay Gate Controller
+    # whose Open relay is bound to the doorbell camera's driver 158, is its door by itself, opened with
+    # its own Open; an admin links the KNX relay 70 besides, and takes it away again.
+    if entrance["doors"] != [{"id": 76, "link": "automatic", "can_open": True}]:
+        fail(f"GET /v1/doorbells/68 should list the gate on its driver's relay: {entrance['doors']}")
+    linked = client.check("PUT", "/v1/doorbells/68/doors", 200, body={"door_ids": [70, 76]})
+    if [(door["id"], door["link"]) for door in linked["doors"]] != [(76, "automatic"), (70, "manual")]:
+        fail(f"PUT /v1/doorbells/68/doors should link the KNX relay once, the gate staying automatic: {linked['doors']}")
+    client.check("PUT", "/v1/doorbells/68/doors", 400, body={"door_ids": [20]})
+    client.check("PUT", "/v1/doorbells/68/doors", 400, body={"doors": [70]})
+    client.check("PUT", "/v1/doorbells/99/doors", 404, body={"door_ids": []})
+    client.check("POST", "/v1/relays/76/pulse", 202, body={"doorbell": 68})
+    if client.check("GET", "/v1/activity?kind=door", 200)["items"][0]["ids"].get("doorbell_id") != 68:
+        fail("an opening from the doorbell should say so in the history")
+    client.check("PUT", "/v1/doorbells/68/doors", 200, body={"door_ids": []})
     if bridge.camera_alert(157, "Animal") != 1:
         fail("an agreement camera's Alert should be watched by its name")
 

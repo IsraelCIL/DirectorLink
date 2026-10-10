@@ -376,6 +376,23 @@ export default {
     },
     notificationTitle: "C’è qualcuno alla porta",
     notificationBody: "{name} ha suonato.",
+    // A doorbell's doors and its own screen (1.11.0, ADR-078).
+    openDoor: "Apri {name}",
+    screenTitle: "Campanello",
+    screenLink: "Schermata del campanello",
+    notFoundTitle: "Campanello non trovato",
+    notFoundText: "Potrebbe essere stato rimosso dal progetto Control4.",
+    links: {
+      title: "Porte e cancelli di questo campanello",
+      help: "Quando suona, la sua schermata e l’avviso della Home mostrano Apri per ciascuno, a chi può aprire quella porta. Un cancello il cui controller è sul relè del campanello stesso compare qui da solo.",
+      automatic: "Sul relè del campanello",
+      manual: "Aggiunto qui",
+      none: "Ancora nessuna porta o cancello qui.",
+      add: "Aggiungi una porta o un cancello",
+      addButton: "Aggiungi",
+      remove: "Rimuovi",
+      removeLabel: "Rimuovi {name} da questo campanello",
+    },
   },
   // The alarm, read-only (ADR-038): for members and admins, once the installer turned it on.
   alarm: {
@@ -1306,6 +1323,8 @@ export default {
     scheduleFailedNamed: "{home} – la programmazione di {name} ha avuto un problema alle {time}. Apri l’app per vedere cosa è successo.",
     other: "{home} – qualcosa richiede la tua attenzione. Apri l’app per vedere cosa è successo.",
     doorbell: "{name} ha suonato alle {time}.",
+    // A ring's button where the browser shows them (1.11.0): it opens the doorbell's screen.
+    openDoorAction: "Apri {name}…",
     doorOpened: "{who} ha aperto {name} alle {time}.",
     doorOpenedScene: "{who} ha aperto {name} con la scena {scene} alle {time}.",
     doorOpenedControl4: "Apertura di {name} tramite Control4 alle {time}.",
@@ -1545,6 +1564,7 @@ export default {
     linkGone: "La scena è stata eliminata",
     answered: "In risposta al link “{label}”",
     answeredUnnamed: "In risposta a un link “Chiedi prima di aprire”",
+    fromDoorbell: "Dal campanello {name}",
   },
   palettes: {
     graphite: "Grafite",
@@ -1942,6 +1962,7 @@ export default {
       roomOrder: "Stanze nell’ordine della casa",
       sonosRooms: "Player Sonos con una stanza scelta",
       sceneLinks: "Scene con un link per le automazioni",
+      doorbellDoors: "Porte e cancelli aggiunti ai campanelli",
       yoursAdded: "Questo dispositivo mantiene il suo accesso (è stato associato dopo la creazione del backup).",
       keysKept: "Chiavi: restano come sono ora. Ogni dispositivo mantiene l’accesso che ha adesso e nessuna chiave del backup torna, quindi un dispositivo rimosso nel frattempo resta escluso.",
       keysBack: "Chiavi che tornano",
@@ -2002,6 +2023,7 @@ export default {
       roomNames: "i nomi delle stanze",
       roomOrder: "l’ordine delle stanze",
       sonosRoom: "il player Sonos “{name}”",
+      doorbellDoors: "le porte del campanello “{name}”",
       personRooms: "le stanze di {name}",
       hiddenRooms: "le stanze nascoste ai membri",
     },

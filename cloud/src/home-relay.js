@@ -53,6 +53,10 @@ import { HomeAlerts } from "./alerts.js";
 // The oldest DirectorLink the relay takes (ADR-059): a home whose last driver is older is answered
 // HOME_UPDATE_REQUIRED, not HOME_OFFLINE (the Worker refuses that driver's connections).
 import { updateRequired } from "./min-version.js";
+// Direct HTTPS (1.12.0, ADR-082): the controller's certificate for its own name and the name's A
+// record (https.js), its order run from the object's alarm, which alerts.js shares (alarms.js).
+import { Alarms } from "./alarms.js";
+import { HTTPS_FEATURE, HomeHttps } from "./https.js";
 
 const DRIVER = "driver";
 const OPEN = 1; // WebSocket readyState
@@ -140,7 +144,12 @@ export class HomeRelay extends DurableObject {
     // driver's frames (member-keys.js); `announced` is its last list of key ids.
     this.keyWork = Promise.resolve();
     this.announced = undefined;
+    // One alarm for the object, shared by the alerts and Direct HTTPS's orders (1.12.0): alerts.js
+    // sets "its" alarm through alertStorage.
+    this.alarms = new Alarms(ctx.storage);
+    this.alertStorage = this.alarms.storageFor("alerts");
     this.alerts = new HomeAlerts(this);
+    this.https = new HomeHttps(this);
     // When the last scene link runs went to the home (milliseconds), for its limit, and when each
     // client's last runs were refused as unknown (linkClient -> [ms], oldest seen first). Memory is
     // enough: a flood keeps the object awake.
@@ -289,8 +298,9 @@ export class HomeRelay extends DurableObject {
         // This relay answers each alert with an id (1.10.1, ADR-073): said at once, before anything
         // else the hello lets it send (`accounts`, `alerts_gone`, requests sent again), so that the
         // driver sends again what it kept from its last connection, and knows a relay that does not.
+        // Since 1.12.0 also that it issues Direct HTTPS certificates (https.js, ADR-082).
         if (attachment.features.includes(ALERT_ACKS)) {
-          this.reply(ws, { type: "relay_features", id: crypto.randomUUID(), features: [ALERT_ACKS] });
+          this.reply(ws, { type: "relay_features", id: crypto.randomUUID(), features: [ALERT_ACKS, HTTPS_FEATURE] });
         }
         await this.ctx.storage.put({ version: attachment.version, last_seen: iso(attachment.lastSeen), driver_features: attachment.features });
         if (data.home !== attachment.home) {
@@ -416,6 +426,11 @@ export class HomeRelay extends DurableObject {
         // One with an id (1.10.1, ADR-073) is answered `notify_result` on this socket, and pushed once
         // however often the driver sends it.
         await this.alerts.notify(data, attachment.home, (answer) => this.reply(ws, answer));
+        return;
+      case "https":
+      case "https_certificate":
+        // Direct HTTPS (1.12.0, ADR-082): the controller's address, its certificate (https.js).
+        this.reply(ws, await this.https.handle(data, attachment.home));
         return;
       case "response":
       case "claim_result":
@@ -754,13 +769,25 @@ export class HomeRelay extends DurableObject {
     return Math.max(lastSeen, autoResponseTime(this.ctx, ws) ?? 0);
   }
 
-  // Alerts' alarms (alerts.js): whether the home has been away long enough to alert.
+  // The object's alarm (alarms.js): the alerts' (whether the home has been away long enough to
+  // alert, alerts.js) and Direct HTTPS's order (https.js), whichever are due; then the next one.
   async alarm() {
-    try {
-      await this.alerts.alarm();
-    } catch (error) {
-      log("alert_alarm_failed", { error: String(error?.message ?? error) });
+    const due = await this.alarms.due(Date.now());
+    if (due.includes("alerts")) {
+      try {
+        await this.alerts.alarm();
+      } catch (error) {
+        log("alert_alarm_failed", { error: String(error?.message ?? error) });
+      }
     }
+    if (due.includes("https")) {
+      try {
+        await this.https.alarm();
+      } catch (error) {
+        log("https_alarm_failed", { error: String(error?.stack ?? error) });
+      }
+    }
+    await this.alarms.arm();
   }
 
   // --- Test endpoints ------------------------------------------------------------------------

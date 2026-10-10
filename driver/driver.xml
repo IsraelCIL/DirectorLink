@@ -135,7 +135,7 @@
           <item>Allowed</item>
         </items>
         <default>Off</default>
-        <tooltip>Test build. Allowed lets DirectorLink also serve its API over HTTPS on port 28443, under a name of its own (Direct HTTPS Status), so that iPhones and iPads reach it at home without the account. In this test build Allowed alone turns it on; from 1.12 the homeowner then turns it on in the app. Off: no HTTPS server and no key.</tooltip>
+        <tooltip>Allowed lets the home's owner turn on, in the app, DirectorLink's API over HTTPS on port 28443 under a name of the home's own (….dlhome.cc), so that iPhones and iPads reach the controller directly at home instead of through DirectorLink's servers. Allowed alone turns nothing on. It needs Remote Access and a home linked to an account: the certificate comes through DirectorLink's servers, which also write the name's public DNS record (the controller's LAN address). Off (the default) stops it, and the name's record is deleted. Direct HTTPS Status says what it does.</tooltip>
       </property>
       <property>
         <name>Direct HTTPS Status</name>

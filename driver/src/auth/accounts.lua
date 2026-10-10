@@ -197,6 +197,18 @@ function Accounts.known()
     return state.known
 end
 
+-- Whether an account uses one of the home's keys, as the account service said last: the home is in
+-- an account (1.12.0: Direct HTTPS needs one, for a home claimed before 1.8.0 too, which recorded
+-- no owner).
+function Accounts.any()
+    for _, tags in pairs(state.keys) do
+        if #tags > 0 then
+            return true
+        end
+    end
+    return false
+end
+
 -- The tags of keys that are gone go (`keys`: Keys.list()).
 function Accounts.prune(keys)
     local exists = {}

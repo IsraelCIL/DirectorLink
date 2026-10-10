@@ -264,7 +264,7 @@ local services = {
     invitations = Invitations,
     pairing = Pairing,
     log = Log,
-    -- Direct HTTPS (1.12.0 test build, ADR-082): the API over TLS on port 28443.
+    -- Direct HTTPS (1.12.0, ADR-082): the API over TLS on port 28443.
     https = DirectHttps,
     -- Remote access with accounts (src/cloud/remote.lua, src/api/handlers/remote.lua).
     remote = {
@@ -623,16 +623,37 @@ function OnDriverLateInit(driverInitType)
     Api.init(services)
     local started = Api.start()
     updateProperty("API Status", started and "Starting..." or "Failed to start")
-    -- Direct HTTPS (ADR-082): nothing unless the installer allowed it in Composer.
+    -- Direct HTTPS (ADR-082): nothing unless the installer allowed it in Composer and the home's
+    -- owner turned it on; the certificate comes over the relay's connection.
     local httpsStored = DirectHttps.configure({
         log = Log,
-        enabled = function()
+        allowed = function()
             return Properties ~= nil and Properties[DirectHttps.PROPERTY] == DirectHttps.ALLOWED
         end,
+        -- Remote Access on, and the home in an account: claimed since 1.8.0 (its owner recorded),
+        -- or an account uses one of its keys (a home claimed before).
+        remote = function()
+            return services.remote.enabled() and services.remote.linked() and (People.claimedBy() ~= nil or Accounts.any())
+        end,
+        relay = {
+            features = Relay.features,
+            tell = Relay.tell,
+            connection = Relay.connectionNumber,
+        },
+        address = function()
+            local ok, value = pcall(function()
+                return C4:GetControllerNetworkAddress()
+            end)
+            return ok and value or nil
+        end,
+        activity = Activity,
         onStatus = function(text)
             updateProperty(DirectHttps.STATUS_PROPERTY, text)
         end,
     })
+    Relay.onFeatures(DirectHttps.relayReady)
+    Relay.on("https_certificate_result", DirectHttps.onRelayMessage)
+    Relay.on("https_result", DirectHttps.onRelayMessage)
     Log.debug("https", "direct https loaded", { stored_as = httpsStored })
     DirectHttps.apply()
 
@@ -782,6 +803,8 @@ function ExecuteCommand(command, params)
         -- The last resort when the home's connection cannot be trusted and its secret cannot be
         -- replaced by the owner (someone else holds it, or took the home over): a new home id.
         -- Invitations and claim tokens were for the old one. The owner links the home again.
+        -- Direct HTTPS's name is the old home's (ADR-082): its record goes on the old connection.
+        DirectHttps.identityReset()
         local ok, code = Relay.resetIdentity()
         if ok then
             local invitations = Invitations.revokeAll()
@@ -847,6 +870,8 @@ function OnPropertyChanged(name)
         else
             Relay.stop()
         end
+        -- Direct HTTPS's certificate comes over the relay (ADR-082).
+        DirectHttps.apply()
     end
     if name == "Schedules" and Properties then
         Log.info("schedules", schedulesPaused() and "schedules paused in Composer" or "schedules resumed in Composer")

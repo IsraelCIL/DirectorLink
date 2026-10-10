@@ -146,6 +146,9 @@ function System.info(ctx)
         },
         -- "C" or "F" (1.10.2): what clients show temperatures in that no one thermostat says.
         temperature_scale = Units.projectScale(registry),
+        -- Direct HTTPS (1.12.0, ADR-082): { name, port, not_after } while the TLS server listens with
+        -- a certificate valid now, where the app reaches this API over HTTPS at home; else null.
+        direct_https = services.https and services.https.published() or Json.null,
         -- A member's: only what they see.
         inventory = inventory(ctx.apiKey, registry, counts),
         lifecycle = {

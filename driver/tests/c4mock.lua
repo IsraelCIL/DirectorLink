@@ -1555,6 +1555,15 @@ function Mock.install(project)
         return csr, X509Fake.pem(X509Fake.spki(point), "PUBLIC KEY"), privateKey
     end
 
+    -- The controller's LAN address (Direct HTTPS tells the Worker it for the name's A record):
+    -- mock.controllerAddress, a test changes it as DHCP would; false: Director gives nothing.
+    function C4:GetControllerNetworkAddress()
+        if mock.controllerAddress == false then
+            return nil
+        end
+        return mock.controllerAddress or "192.168.1.10"
+    end
+
     function C4:DestroyServer(port)
         mock.servers[port] = nil
         mock.tlsServers[port] = nil

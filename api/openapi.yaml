@@ -41,8 +41,8 @@ info:
     **Addresses and browsers.** Requests must be sent to the controller's IP address or a local name
     (e.g. `director.local`); any other `Host` is refused with `421 MISDIRECTED_REQUEST` (this stops
     DNS rebinding). Browsers may call the API only from DirectorLink's own sites. With Direct HTTPS
-    (1.12.0 test build, tag HTTPS) the same API is also served over TLS on port 28443, where the
-    `Host` may also be exactly the home's own name under `dlhome.cc`.
+    (1.12.0, tag HTTPS) the same API is also served over TLS on port 28443, where the `Host` may also
+    be exactly the home's own name under `dlhome.cc` (`direct_https` in `GET /v1/system`).
 
     **Sealed requests.** The DirectorLink app does not send its key on the home network: it seals
     each request with its device's lock key and sends it to `POST /v1/sealed`, and pairs with CPace,
@@ -153,12 +153,15 @@ tags:
       device's own key and role.
   - name: HTTPS
     description: |
-      Direct HTTPS (1.12.0 test build, ADR-082): the same API over TLS on port 28443, under a name of
-      the home's own (`<20 letters and digits>.dlhome.cc`, whose public DNS record points at the
-      controller's LAN address) with a publicly trusted certificate, so that iPhones and iPads reach
-      the controller from app.directorlink.io at home. Off unless the installer sets DirectorLink's
-      **Direct HTTPS** property to Allowed in Composer (in this test build that alone turns it on).
-      The controller makes its own key; its private key never leaves the controller.
+      Direct HTTPS (1.12.0, ADR-082): the same API over TLS on port 28443, under a name of the home's
+      own (`<20 letters and digits>.dlhome.cc`, whose public DNS record points at the controller's
+      LAN address) with a publicly trusted certificate (Let's Encrypt), so that iPhones and iPads
+      reach the controller from app.directorlink.io at home. Two switches: the installer sets
+      DirectorLink's **Direct HTTPS** property to Allowed in Composer, then the home's owner turns it
+      on (`PUT /v1/https`). It needs Remote Access and a home linked to an account: the controller
+      makes its own key and asks DirectorLink's servers for the certificate, which also keep the
+      name's DNS record. The private key never leaves the controller. Where to reach it is
+      `direct_https` in `GET /v1/system`.
 
 paths:
   /v1/health:
@@ -511,93 +514,53 @@ paths:
       tags: [HTTPS]
       operationId: getDirectHttps
       x-directorlink-role: admin
-      summary: Direct HTTPS status and certificate request
+      summary: Direct HTTPS's state
       description: |
-        Whether Direct HTTPS is on, the home's name, the TLS server's state and the certificate in
-        use. `csr` (PEM) is given while the controller waits for a certificate, or with `csr=true`.
-        Never the private key. Requests on port 28443 go through the same Host check, CORS, keys,
-        sealing and routes as on 41999; the Host may also be exactly the home's name there.
-      parameters:
-        - name: csr
-          in: query
-          required: false
-          description: true gives the certificate request whatever the state.
-          schema:
-            type: boolean
+        Whether the installer allowed it (`allowed`), whether the home's owner turned it on
+        (`enabled`), whether what it needs is there (`remote`), the home's name, the state and the
+        certificate in use. Never the private key, nor the certificate request. Requests on port
+        28443 go through the same Host check, CORS, keys, sealing and routes as on 41999; the Host may
+        also be exactly the home's name there.
       responses:
         "200":
-          description: The status.
+          description: The state.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DirectHttps"
-        "400":
-          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-
-  /v1/https/certificate:
     put:
       tags: [HTTPS]
-      operationId: setDirectHttpsCertificate
+      operationId: setDirectHttps
       x-directorlink-role: admin
-      summary: Install the certificate for the controller's key
+      summary: The home's owner turns Direct HTTPS on or off
       description: |
-        The certificate issued for the CSR of `GET /v1/https` (`certificate`, PEM), and the
-        certificates between it and a root (`chain`, PEM, as Let's Encrypt's `chain.pem`; or send
-        `fullchain.pem` as `certificate` and leave `chain` out). Refused unless its public key is the
-        controller's (`422 CERTIFICATE_KEY_MISMATCH`), it names the home's name (`422
-        CERTIFICATE_NAME_MISMATCH`) and has not expired (`422 CERTIFICATE_EXPIRED`), and at least one
-        issuer certificate comes with it. Kept on the controller; the TLS server on port 28443 is then
-        started again with it (`state` `starting`, then `listening`).
+        Only the home's owner (ADR-064; `403 OWNER_ONLY` for anyone else), once the installer has
+        allowed it in Composer (`409 HTTPS_NOT_ALLOWED` while the property says Off). On needs Remote
+        Access on and the home linked to an account (`409 REMOTE_ACCESS_NEEDED`): the controller then
+        makes its name and key once, asks DirectorLink's servers for a certificate (`state`
+        `requesting`) and serves the API on port 28443 once it has one (`listening`, tens of seconds
+        later). Off stops the TLS server, forgets the certificate and has DirectorLink's servers
+        delete the name's DNS record; the name and the key stay for the next time. In the history
+        (`system` `direct_https`, `to` `on` or `off`). The same switch again changes nothing.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/DirectHttpsCertificate"
+              $ref: "#/components/schemas/DirectHttpsSwitch"
       responses:
         "200":
-          description: Installed; the status.
+          description: Switched; the state.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DirectHttps"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          description: The certificate is not for this controller's key (`CERTIFICATE_KEY_MISMATCH`) or name (`CERTIFICATE_NAME_MISMATCH`), or it expired (`CERTIFICATE_EXPIRED`).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "503":
-          $ref: "#/components/responses/Unavailable"
-
-  /v1/https/new-key:
-    post:
-      tags: [HTTPS]
-      operationId: newDirectHttpsKey
-      x-directorlink-role: admin
-      summary: A new key and certificate request for the same name
-      description: |
-        The controller forgets its key, its CSR and the certificate (the TLS server stops) and makes a
-        new key and CSR for the same name. Install a certificate for the new CSR afterwards.
-      responses:
-        "200":
-          description: The new status, with the new `csr`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DirectHttps"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3897,7 +3860,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off; `HTTPS_OFF`, while its Direct HTTPS property is Off), or Direct HTTPS has no key (`HTTPS_NO_KEY`, test build).
+      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off; `HTTPS_NOT_ALLOWED`, while its Direct HTTPS property is Off), or Direct HTTPS needs Remote Access on and the home linked to an account (`REMOTE_ACCESS_NEEDED`, 1.12.0).
       content:
         application/problem+json:
           schema:
@@ -3932,13 +3895,14 @@ components:
         The API key's role does not allow this (`FORBIDDEN`, with `role` and `required_role`), or
         door control is switched off in Composer (`DOOR_CONTROL_DISABLED`), or a claim token was
         asked for through remote access (`CLAIM_ONLY_ON_HOME_NETWORK`), or the alarm's status or a
-        backup was asked for without sealing the request (`SEALED_REQUEST_REQUIRED`).
+        backup was asked for without sealing the request (`SEALED_REQUEST_REQUIRED`), or only the
+        home's owner may do it (`OWNER_ONLY`).
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     Unavailable:
-      description: The bridge cannot serve this right now (`UNAVAILABLE`), or cannot seal remote requests (`LOCK_UNAVAILABLE`), or Director made no key for Direct HTTPS (`HTTPS_KEY_FAILED`, test build).
+      description: The bridge cannot serve this right now (`UNAVAILABLE`), or cannot seal remote requests (`LOCK_UNAVAILABLE`).
       content:
         application/problem+json:
           schema:
@@ -4105,6 +4069,14 @@ components:
             schedules' thresholds, "only if") — Composer's, as Director reports it; else the one most
             thermostats work in; else C. Since 1.10.2 (ADR-076); missing before (then °C).
             Thresholds stay °C in the API.
+        direct_https:
+          description: >-
+            Direct HTTPS (1.12.0, ADR-082), for every key: where this API is also served over HTTPS at
+            home (`https://<name>:<port>`), only while the TLS server listens with a certificate valid
+            now; else null. Missing before 1.12.0.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/DirectHttpsEndpoint"
         inventory:
           type: object
           description: What the home has; for a member (1.8.0, ADR-054) only what they see, their rooms and the devices there that they see.
@@ -6815,30 +6787,35 @@ components:
 
     DirectHttps:
       type: object
-      description: Direct HTTPS (1.12.0 test build, ADR-082). Never the private key.
-      required: [enabled, name, port, state, csr, certificate, error]
+      description: Direct HTTPS (1.12.0, ADR-082). Never the private key, nor the certificate request.
+      required: [allowed, enabled, remote, name, port, state, certificate, error]
       properties:
-        enabled:
+        allowed:
           type: boolean
           description: The installer set DirectorLink's Direct HTTPS property to Allowed in Composer.
+        enabled:
+          type: boolean
+          description: The home's owner turned it on (`PUT /v1/https`); false while it is not allowed.
+        remote:
+          type: boolean
+          description: Remote Access is on in Composer and the home is linked to an account, which turning it on needs (the certificate comes through DirectorLink's servers).
         name:
           type: [string, "null"]
           pattern: "^[a-z2-7]{20}[.]dlhome[.]cc$"
-          description: The home's name, made with the first key and kept with later ones; null before.
+          description: The home's name, made the first time it is turned on and kept from then on; null before.
         port:
           type: integer
           const: 28443
         state:
           type: string
-          enum: ["off", waiting_for_certificate, starting, listening, error]
+          enum: [not_allowed, "off", requesting, listening, error]
           description: |
-            `off`: Direct HTTPS is Off. `waiting_for_certificate`: the key and CSR are made, no
-            certificate yet. `starting`: the TLS server was asked for and Director has not said it is
-            online (it retries a busy port every 10 s). `listening`: online. `error`: see `error`.
-        csr:
-          type: [string, "null"]
-          description: The certificate request (PEM, P-256, SHA-256, CN and DNS name the home's name), while waiting for a certificate or with `csr=true`.
+            `not_allowed`: the Composer property is Off. `off`: allowed, and the owner has not turned it
+            on. `requesting`: on, and the controller is asking DirectorLink's servers for a certificate
+            (or waits for its connection, or for Director to start the TLS server). `listening`: the
+            TLS server on port 28443 is online with a certificate valid now. `error`: see `error`.
         certificate:
+          description: The certificate the controller has (while on), or null.
           oneOf:
             - type: "null"
             - type: object
@@ -6849,26 +6826,38 @@ components:
                   format: date-time
                 issuer_cn:
                   type: [string, "null"]
+                  description: Its issuer's name, such as YE1.
         error:
           type: [string, "null"]
-          description: Why the state is `error` (for example "not supported on this OS"); else null.
-        warning:
-          type: [string, "null"]
-          description: Something to fix that does not stop it, such as an expired certificate, or a CSR whose curve public CAs refuse.
+          description: |
+            What keeps it from working, in English (for example "not supported on this OS", or
+            DirectorLink's servers' refusal with when it is tried again); also while `listening`, when
+            the next certificate could not be had yet. Null otherwise.
 
-    DirectHttpsCertificate:
+    DirectHttpsSwitch:
       type: object
       additionalProperties: false
-      required: [certificate]
+      required: [enabled]
       properties:
-        certificate:
+        enabled:
+          type: boolean
+          description: true turns Direct HTTPS on, false off.
+
+    DirectHttpsEndpoint:
+      type: object
+      description: Where the app reaches this API over HTTPS at home (1.12.0, ADR-082).
+      required: [name, port, not_after]
+      properties:
+        name:
           type: string
-          maxLength: 16384
-          description: The certificate (PEM), possibly followed by its issuers (fullchain.pem).
-        chain:
-          type: [string, "null"]
-          maxLength: 16384
-          description: The issuers' certificates (PEM), as chain.pem.
+          pattern: "^[a-z2-7]{20}[.]dlhome[.]cc$"
+        port:
+          type: integer
+          const: 28443
+        not_after:
+          type: string
+          format: date-time
+          description: When its certificate expires.
 
     RemoteAccess:
       type: object
@@ -7407,7 +7396,8 @@ components:
           when it is back), `driver_updated` (`from`, `to`), `driver_started` (the controller or the
           driver restarted), `driver_added`, `remote_update_required` (1.8.0: the account service no
           longer takes this version of DirectorLink for remote access; `from` this version, `to` the
-          oldest it takes when it said; once until a connection opens again).
+          oldest it takes when it said; once until a connection opens again), `direct_https` (1.12.0,
+          ADR-082: the home's owner turned Direct HTTPS `to` `on` or `off`; `who` is their key).
       required: [id, at, kind, action, who]
       properties:
         id:
@@ -7422,7 +7412,7 @@ components:
           enum: [scene, schedule, door, composer, access, system]
         action:
           type: string
-          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required]
+          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required, direct_https]
         who:
           $ref: "#/components/schemas/ActivityWho"
         what:

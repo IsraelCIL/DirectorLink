@@ -541,10 +541,10 @@ export default {
         coolWarmer: "cool setpoint {degrees} warmer",
         coolCooler: "cool setpoint {degrees} cooler",
       },
-      blinds: { open: "blinds open", close: "blinds closed", position: "blinds {percent}%", stop: "blinds stop" },
-      blind: { open: "open", close: "close", position: "{percent}%", stop: "stop" },
-      fans: { on: "fans on", off: "fans off" },
-      fan: { on: "on", off: "off" },
+      blinds: { open: "blinds open", close: "blinds closed", position: "blinds {percent}%", stop: "blinds stop", opener: "blinds {percent}% more open", closer: "blinds {percent}% more closed" },
+      blind: { open: "open", close: "close", position: "{percent}%", stop: "stop", opener: "{percent}% more open", closer: "{percent}% more closed" },
+      fans: { on: "fans on", off: "fans off", faster: { one: "fans a speed faster", other: "fans {count} speeds faster" }, slower: { one: "fans a speed slower", other: "fans {count} speeds slower" } },
+      fan: { on: "on", off: "off", faster: { one: "a speed faster", other: "{count} speeds faster" }, slower: { one: "a speed slower", other: "{count} speeds slower" } },
       music: { play: "play music", pause: "pause music", next: "next song", volume: "volume {percent}%", louder: "volume up {percent}", quieter: "volume down {percent}" },
       roomOff: "everything off",
       door: "open",
@@ -582,7 +582,9 @@ export default {
     },
     // Lights named for heating are left as they are unless named (1.10.0).
     heatersLeft: { one: "The heater “{names}” is left as it is.", other: "The heaters {names} are left as they are." },
-    // Two or three things said at once: the part that cannot be done, and nothing is.
+    // A room’s level goes to its dimmers only (1.10.3; said since 1.11.0).
+    switchesLeft: "Only dimmers get a percentage; switches stay as they are.",
+    // Two to five things said at once: the part that cannot be done, and nothing is.
     part: "In “{part}”: {text} Nothing was done.",
     problem: {
       viewOnly: "This device can’t control the home.",
@@ -613,6 +615,10 @@ export default {
       cannotDimRoom: "The lights in {room} only turn on and off.",
       noPosition: "{name} only opens and closes fully.",
       noPositionRoom: "The blinds in {room} only open and close fully.",
+      noBlindPosition: "{name} doesn’t say where it is. Say open, close or a percentage.",
+      noSpeeds: "{name} only turns on and off.",
+      noSpeedsRoom: "The fans in {room} only turn on and off.",
+      speedUnknown: "{name} doesn’t say which speed it runs at. Set its speed in its room.",
       noMode: "{name} has no {mode} mode.",
       noModes: "{name} has no mode to turn on.",
       alreadyOn: "{name} is already on.",

@@ -80,8 +80,9 @@ async function eventually(check, what, timeoutMs = 5000) {
 }
 
 // A home claimed by Dana, with one key. Its driver's connections answer claims and nothing else:
-// `got` is every e2e, link and request they were sent.
-async function claimedHome() {
+// `got` is every e2e, link and request they were sent. `answer(message, connection, state)`, when
+// given, answers each e2e message.
+async function claimedHome({ answer } = {}) {
   const state = { home: randomHex(16), secret: randomHex(32), instance: randomHex(16), keyId: randomHex(4), apiKey: `ak_${randomHex(24)}`, claimToken: randomHex(24), got: [] };
   state.connect = async () => {
     const connection = await connectDriver({ url: worker.ws, home: state.home, secret: state.secret, pingIntervalMs: 0, silenceTimeoutMs: 0, hello: false });
@@ -92,6 +93,7 @@ async function claimedHome() {
         connection.sendJson({ type: "claim_result", id: message.id, ok: message.token === state.claimToken });
       } else if (["e2e", "link"].includes(message.type)) {
         state.got.push(message);
+        if (answer && message.type === "e2e") answer(message, connection, state);
       }
     });
     connection.on("request", (message) => state.got.push(message));
@@ -196,4 +198,24 @@ test("a request sent again keeps to the same budget", { timeout: 60_000 }, async
   assert.equal(sentAgain.state.got.length, 2, "sent again");
   assert.equal(sentAgain.state.got[1].resent, 1);
   assertWithinBudget(sentAgain.result, "a request sent again");
+});
+
+// A relayed message is logged only when the home refused it or it took 3 s or more (1.11.0,
+// ADR-081): one line per message was most of the Worker's log, and logs are billed by the line.
+test("a relayed message is logged only when it was refused or slow", { timeout: 30_000 }, async () => {
+  const sealed = (message, state) => ({ type: "e2e", id: message.id, envelope: seal(lockKey(state.apiKey), { home: state.home, key: state.keyId }, "res", JSON.stringify({ status: 200, body: {} })) });
+  const fast = await claimedHome({ answer: (message, connection, state) => connection.sendJson(sealed(message, state)) });
+  const refused = await claimedHome({ answer: (message, connection) => connection.sendJson({ type: "e2e", id: message.id, code: "UNKNOWN_KEY" }) });
+  const slow = await claimedHome({ answer: (message, connection, state) => setTimeout(() => connection.sendJson(sealed(message, state)), 3300) });
+  const [quick, , late] = await Promise.all([press(fast), press(refused), press(slow)]);
+  assert.equal(quick.status, 200, quick.text);
+  assert.equal(late.status, 200, late.text);
+  const logged = (state) => worker.output().split("\n").find((line) => line.includes(`"event":"message_relayed","home":"${state.home}"`));
+  const refusedLine = await eventually(() => logged(refused), "the refused message's line");
+  assert.match(refusedLine, /"ok":false/);
+  assert.match(refusedLine, /"code":"UNKNOWN_KEY"/);
+  const slowLine = await eventually(() => logged(slow), "the slow message's line");
+  assert.match(slowLine, /"ok":true/);
+  assert.ok(Number(/"ms":(\d+)/.exec(slowLine)[1]) >= 3000, slowLine);
+  assert.equal(logged(fast), undefined, "a quick answer leaves no line");
 });

@@ -2119,6 +2119,28 @@ export default {
       },
     },
   },
+  // Settings → Controller → Direct connection at home (1.12.0, ADR-082; js/views/direct.js).
+  directHttps: {
+    title: "Conexión directa en casa",
+    label: "Conexión directa en casa",
+    intro: "Cuando está activada, todos los dispositivos, también el iPhone y el iPad, llegan al controlador directamente por la red de casa: más rápido y sin los servidores de DirectorLink.",
+    how: "Para ello, el controlador recibe un nombre aleatorio bajo dlhome.cc que apunta a su dirección dentro de la red de casa, a la que solo llegan los dispositivos que están en casa. El nombre aparece públicamente en los registros de certificados, y los servidores de DirectorLink conocen el nombre y esa dirección.",
+    chrome: "En Android y en el ordenador, Chrome puede pedir acceso a los dispositivos de la red local: permítelo.",
+    stateLabel: "Estado:",
+    state: {
+      off: "Desactivada",
+      requesting: "Obteniendo un certificado…",
+      listening: "Activada hasta el {date}",
+      on: "Activada",
+      error: "No funcionó: {error}",
+      errorUnknown: "No funcionó",
+      notAllowed: "No permitida en Composer",
+    },
+    notAllowed: "Primero tu instalador tiene que permitirla: en Composer, pon la propiedad Direct HTTPS de DirectorLink en Allowed.",
+    remoteNeeded: "Necesita Remote Access activado en Composer y esta casa vinculada a tu cuenta.",
+    remoteLink: "Vincúlala en Ajustes → Cuenta",
+    ownerOnly: "Solo el propietario de la casa puede activarla o desactivarla.",
+  },
   settings: {
     title: "Ajustes",
     // The rows that open Settings' pages, each with a line of how things are.
@@ -2225,6 +2247,12 @@ export default {
       forgetConfirm: "¿Quitar el acceso de este dispositivo? Necesitarás un nuevo código de emparejamiento de Composer para volver a usar la app.",
       forgetLinks: { one: "El enlace de escena creado en este dispositivo también dejará de funcionar.", other: "Los {count} enlaces de escena creados en este dispositivo también dejarán de funcionar." },
       forgotten: "Se quitó la clave de acceso de este dispositivo.",
+      thisDevice: "Este dispositivo",
+      via: {
+        https: "En la red de casa, directamente (HTTPS)",
+        http: "En la red de casa",
+        remote: "A través de los servidores de DirectorLink",
+      },
     },
     account: {
       title: "Cuenta",

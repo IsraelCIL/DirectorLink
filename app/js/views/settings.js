@@ -26,6 +26,7 @@ import { alarmFact } from "./alarm.js";
 import { alertsPage, alertsStatus } from "./alerts.js";
 import { makeInvitation, pasteInvitationPanel } from "./device-join.js";
 import { deviceLimitOf, deviceLimitPanel } from "./device-limit.js";
+import { directCard } from "./direct.js";
 import { accessBody, newMemberAccess, peopleSupported, permissionsEditor } from "./permissions.js";
 import { loadScenes } from "../scenes.js";
 import { backupPanel } from "./backup.js";
@@ -43,7 +44,7 @@ export const SETTINGS_PAGES = ["controller", "rooms", "calendar", "account", "al
 export function settingsView({ page = null, onPalette, onTheme, onLanguage, onTextSize, navigate }) {
   switch (page) {
     case "controller":
-      return subpage(t("settings.controller.title"), controllerSection(navigate), historyRow(), updatesSection(), backupPanel());
+      return subpage(t("settings.controller.title"), controllerSection(navigate), directCard(), historyRow(), updatesSection(), backupPanel());
     case "rooms":
       return subpage(t("settings.rooms.title"), roomsSection(), roomNamesSection(), musicSection());
     case "calendar":
@@ -1085,6 +1086,9 @@ function controllerSection(navigate) {
   const system = state.system;
   const rows = [
     [t("settings.controller.status"), t(`status.${state.status}`)],
+    // Which way this device reaches its home (1.12.0): directly over HTTPS, the home network, or
+    // DirectorLink's servers.
+    state.status === "connected" ? [t("settings.controller.thisDevice"), connectionText()] : null,
     state.role ? [t("settings.controller.access"), roleLabel(state.access?.role || state.role)] : null,
     state.lastUpdated && state.loaded ? [t("settings.controller.updated"), formatTime(state.lastUpdated)] : null,
     system?.controller?.model ? [t("settings.controller.model"), system.controller.model] : null,
@@ -1177,6 +1181,12 @@ function controllerSection(navigate) {
         : null
     )
   );
+}
+
+// How this device reaches its home now (session.js: state.transport, state.lanRoute).
+export function connectionText() {
+  if (state.transport === "remote") return t("settings.controller.via.remote");
+  return state.lanRoute === "https" ? t("settings.controller.via.https") : t("settings.controller.via.http");
 }
 
 function facts(rows) {

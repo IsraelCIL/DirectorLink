@@ -2118,6 +2118,28 @@ export default {
       },
     },
   },
+  // Settings → Controller → Direct connection at home (1.12.0, ADR-082; js/views/direct.js).
+  directHttps: {
+    title: "Direct connection at home",
+    label: "Direct connection at home",
+    intro: "When it’s on, every device, iPhones and iPads too, reaches your controller directly on your home network: faster, and without DirectorLink’s servers.",
+    how: "For that, your controller gets a random name under dlhome.cc that points to its address inside your home network, which only devices at home can reach. The name is listed publicly in certificate logs, and DirectorLink’s servers learn the name and that address.",
+    chrome: "On Android and computers, Chrome may ask to reach devices on your local network: allow it.",
+    stateLabel: "Status:",
+    state: {
+      off: "Off",
+      requesting: "Getting a certificate…",
+      listening: "On until {date}",
+      on: "On",
+      error: "Didn’t work: {error}",
+      errorUnknown: "Didn’t work",
+      notAllowed: "Not allowed in Composer",
+    },
+    notAllowed: "Your installer has to allow it first: in Composer, set DirectorLink’s Direct HTTPS property to Allowed.",
+    remoteNeeded: "It needs Remote Access on in Composer, and this home linked to your account.",
+    remoteLink: "Link it in Settings → Account",
+    ownerOnly: "Only the home’s owner can turn it on or off.",
+  },
   settings: {
     title: "Settings",
     // The rows that open Settings' pages, each with a line of how things are.
@@ -2224,6 +2246,12 @@ export default {
       forgetConfirm: "Remove this device’s access? You will need a new pairing code from Composer to use the app again.",
       forgetLinks: { one: "The scene link made on this device stops working too.", other: "The {count} scene links made on this device stop working too." },
       forgotten: "The access key was removed from this device.",
+      thisDevice: "This device",
+      via: {
+        https: "On the home network, direct (HTTPS)",
+        http: "On the home network",
+        remote: "Through DirectorLink’s servers",
+      },
     },
     account: {
       title: "Account",

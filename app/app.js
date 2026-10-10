@@ -287,9 +287,11 @@ function signature() {
     // The sign-ins the account server has set up (account.js), once asked.
     signInProviders(),
     providersStatus(),
-    // Remote access (remote.js): the connection in use, the controller's answer, and whether this
-    // device is linked (kept in localStorage, so it is read here).
+    // Remote access (remote.js): the connection in use (at home: the Direct HTTPS name or the
+    // address, 1.12.0), the controller's answer, and whether this device is linked (kept in
+    // localStorage, so it is read here).
     state.transport,
+    state.lanRoute,
     state.remoteInfo,
     savedRemote(),
     // Alerts on this device (js/alerts.js): on, possible, being switched, what it said.
@@ -354,6 +356,8 @@ function signature() {
     route.name === "settings" ? ui.backup : 0,
     // Its automatic backups to the account (passwords in views/cloud-backup.js, not in `ui`).
     route.name === "settings" ? ui.autoBackup : 0,
+    // Direct connection at home (1.12.0, views/direct.js).
+    route.name === "settings" ? ui.directHttps : 0,
     // "Last update", on Settings → Controller only: the other pages are not redrawn by every poll.
     route.name === "settings" && route.page === "controller" ? state.lastUpdated?.getTime() : 0,
     route.name === "settings" ? [notificationSupport(), notificationsOn()] : 0,

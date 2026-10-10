@@ -29,6 +29,8 @@ const ASSETS = [
   "/js/cpace.js",
   "/js/device-join.js",
   "/js/views/device-join.js",
+  "/js/direct.js",
+  "/js/views/direct.js",
   "/js/platform.js",
   "/js/qr.js",
   "/js/remote.js",

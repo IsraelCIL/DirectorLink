@@ -16,7 +16,8 @@ return {
     { method = "POST", path = "/v1/api-keys", handler = "auth.create_key", role = "admin" },
     { method = "GET", path = "/v1/api-keys/current", handler = "auth.current_key", role = "member" },
     { method = "DELETE", path = "/v1/api-keys/current", handler = "auth.revoke_current_key", role = "member" },
-    { method = "PATCH", path = "/v1/api-keys/{keyId}", handler = "auth.update_key", role = "admin" },
+    -- Since 1.12.0 (ADR-083) a member renames their own user's devices (only `name`; the handler checks).
+    { method = "PATCH", path = "/v1/api-keys/{keyId}", handler = "auth.update_key", role = "member" },
     -- Since 1.9.0 (ADR-061) a member removes their own user's other devices (Access.mayRemoveDevice).
     { method = "DELETE", path = "/v1/api-keys/{keyId}", handler = "auth.delete_key", role = "member" },
 

@@ -547,6 +547,15 @@ export function clientName() {
     ((/Mac OS X|Macintosh/.test(agent) || platform === "macOS") && "Mac") ||
     ((/Linux/.test(agent) || platform === "Linux") && "Linux") ||
     "";
+  // The app added to the Home Screen (or installed) is not its browser (1.12.0, ADR-083): on an
+  // iPad, Safari and the Home Screen app are two devices, and their names tell them apart.
+  let installed = false;
+  try {
+    installed = navigator.standalone === true || window.matchMedia?.("(display-mode: standalone)")?.matches === true;
+  } catch {
+    installed = false;
+  }
+  if (installed) return (system ? `DirectorLink app on ${system}` : "DirectorLink app").slice(0, 64);
   return (system ? `${browser} on ${system}` : `${browser} (DirectorLink app)`).slice(0, 64);
 }
 

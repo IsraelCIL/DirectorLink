@@ -502,12 +502,23 @@ end
 -- their permissions), or, as 1.7.0 clients do, gives it a role: since 1.8.0 (ADR-054) a role is its
 -- person's, so that changes the person, all of their devices, into what that 1.7.0 role becomes
 -- (nothing changes when the key has that role already). The owner's devices are only theirs to
--- move, and the owner stays an admin.
+-- move, and the owner stays an admin. Since 1.12.0 (ADR-083) a member renames the devices of their
+-- own user (only `name`): another user's device is, for them, one that does not exist, and changing
+-- a role or a user stays the admins'.
 function Auth.update_key(ctx)
     local body = ctx.body
     local problem = Validate.body(body, { name = true, role = true, profile_id = true }, true)
     if problem then
         return problem
+    end
+    if not Access.isAdmin(ctx.apiKey) then
+        if body.role ~= nil or body.profile_id ~= nil then
+            return Problem.new(403, "FORBIDDEN", "Only admins change a device's access or user; you may rename your own devices", { role = ctx.apiKey.role, required_role = "admin" })
+        end
+        local target = ctx.services.keys.find(ctx.params.keyId)
+        if not (target and target.profile and Access.seesUser(ctx.apiKey, target.profile)) then
+            return Problem.notFound("API key", ctx.params.keyId)
+        end
     end
     local changes = {}
     if body.name ~= nil then
@@ -573,8 +584,9 @@ function Auth.update_key(ctx)
         record = ctx.services.keys.find(id)
     end
     -- Only admins make invitations: a key that is no longer admin keeps none (its claim token
-    -- stops working too, src/cloud/remote.lua).
-    if record.role ~= "admin" and ctx.services.invitations then
+    -- stops working too, src/cloud/remote.lua). A rename alone changes nothing of that (1.12.0: a
+    -- member renames their own devices, whose own invitations stay).
+    if (body.role ~= nil or changes.profile ~= nil) and record.role ~= "admin" and ctx.services.invitations then
         ctx.services.invitations.revokeCreatedBy(id)
     end
     ctx.services.log.info("auth", "API key changed", { key_id = id, name = record.name, role = record.role, by = ctx.apiKey.id })

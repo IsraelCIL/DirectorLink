@@ -446,9 +446,12 @@ paths:
     patch:
       tags: [Auth]
       operationId: updateApiKey
-      x-directorlink-role: admin
+      x-directorlink-role: member
       summary: Rename an API key, move it to another person, or set a 1.7.0 role
       description: |
+        Since 1.12.0 (ADR-083) a member renames the devices of their own user (`name` only): any
+        other key is, for them, one that does not exist (`404`), and `role` or `profile_id` is
+        refused (`403 FORBIDDEN`). An admin renames any device, the owner's too.
         A key has its person's permissions (ADR-054): `profile_id` moves it to another person, and
         it then has theirs. `role`, as DirectorLink 1.7.0 clients send it, changes the key's person
         (all of their devices) into what that role became in 1.8.0, unless the key has that role
@@ -697,6 +700,16 @@ paths:
         With `email`, the controller registers the invitation with the account service first; if
         that fails (`REMOTE_OFFLINE`, or the service's own code with 502) the invitation is
         revoked, since its link could not work.
+        Since 1.12.0 (ADR-083) an admin's invitation for a new user may name that user (`name`):
+        whoever accepts it becomes a user of that name (without it, one named after their device, as
+        before). The name stays on the controller: the account service is told the invitation's id,
+        email and expiry only, and the joining device reads the name in the sealed answer to its
+        join (`user`, with `home_name`, the project's site). A move invitation (`for_me` and `move`,
+        any user, 10 minutes at most and by default, one per device: a new one replaces the one
+        before) is for this same device's place: the device that accepts it joins this user, and
+        the key that made it is revoked at the new key's first sealed request (only that key, and
+        only while both are devices of the same user), so the user's devices stay as many; five
+        devices do not refuse it. Revoking the key that made it revokes it too.
       requestBody:
         required: true
         content:
@@ -773,11 +786,12 @@ paths:
       tags: [Profiles]
       operationId: updateProfile
       x-directorlink-role: member
-      summary: Change the caller's preferences
+      summary: Change the caller's preferences, or their name
       description: |
         Changes the named preferences; `null` clears one, others keep their values. With `version`,
         the change applies only if the profile has not changed since that version was read
-        (otherwise 409 `VERSION_CONFLICT`).
+        (otherwise 409 `VERSION_CONFLICT`). Since 1.12.0 (ADR-083) `name` renames the caller's own
+        user, any user, the owner too (admins rename anyone with `PATCH /v1/profiles/{profileId}`).
       requestBody:
         required: true
         content:
@@ -4177,6 +4191,9 @@ components:
             scene_levels_dimmers_only:
               type: boolean
               description: "Always true since ADR-077's change of 2026-10-09: a lights scene step with a level above 0 for a room or the whole home (no `device_ids`) goes to dimmers only, and on/off lights there stay as they are (skipped, `ON_OFF_ONLY`, counted in the run's `on_off_only`); one the step names still turns on. Missing before, when such a step turned them on."
+            user_names:
+              type: boolean
+              description: "Always true since 1.12.0: an invitation names the new user (`name`), a user names themself (`PATCH /v1/profile` `name`, and `name_from_device` in `GET /v1/profile`) and renames their own devices (`PATCH /v1/api-keys/{keyId}` by a member), and a device moves to another device of the same user (a move invitation) (ADR-083). Missing before 1.12.0."
 
     PairRequest:
       oneOf:
@@ -5732,6 +5749,9 @@ components:
         access:
           $ref: "#/components/schemas/PersonAccess"
           description: Since 1.8.0 (ADR-054). In `/v1/profile` what the caller may do; in `/v1/profiles` each person's role and permissions.
+        name_from_device:
+          type: boolean
+          description: "Since 1.12.0 (ADR-083), in the caller's own profile only (GET and PATCH /v1/profile): the user's name is still the name of one of their devices (a user made by a device that joined or paired is named after it); the app then asks once for their name."
         gone_favorites:
           type: array
           description: |
@@ -5778,9 +5798,15 @@ components:
 
     ProfileUpdate:
       type: object
-      required: [prefs]
+      minProperties: 1
       additionalProperties: false
+      description: "`prefs`, `name` (since 1.12.0), or both."
       properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The caller's own user's name (since 1.12.0, ADR-083).
         prefs:
           type: object
           additionalProperties: false
@@ -7179,6 +7205,14 @@ components:
             the account service itself before answering (`registered: true`); without it, the
             home's owner registers it from the app. A member's (`for_me`) only for an account that
             already uses the member's device at the home (`403 ACCOUNT_NOT_OF_DEVICE`).
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The new user's name (since 1.12.0, ADR-083), kept on the controller only; not with `for_me` or `profile_id`. 1 to 64 characters.
+        move:
+          type: boolean
+          description: With `for_me` (since 1.12.0, ADR-083), a move invitation for this device's place in its user; it lasts 10 minutes at most.
 
     Invitation:
       type: object
@@ -7209,6 +7243,12 @@ components:
         access:
           $ref: "#/components/schemas/PersonAccess"
           description: The person it makes (since 1.8.0); missing for `for_me`.
+        name:
+          type: string
+          description: The new user's name, when the admin gave one (since 1.12.0, ADR-083).
+        move:
+          type: boolean
+          description: A move invitation (since 1.12.0, ADR-083); missing otherwise.
 
     NewInvitation:
       allOf:
@@ -7388,6 +7428,9 @@ components:
           a day).
         - The owner (1.9.0, ADR-064): `access` `owner_changed` (the owner made the admin user `what`
           the home's owner instead of `from`).
+        - A device moved (1.12.0, ADR-083): `access` `moved` (the device `what`, which joined with a
+          move invitation, used its key for the first time, and the device `from` it moved from, of
+          the same user, was revoked; `who` is the new device).
         - `composer`: `project` (devices and rooms removed, added, renamed or moved, in `changes`),
           `setting` (a DirectorLink property changed in Composer: `what` is its name, `to` its value).
         - `system`: `backup`, `restore` (`from`: when the backup was made), `cloud_backup` (an
@@ -7414,7 +7457,7 @@ components:
           enum: [scene, schedule, door, composer, access, system]
         action:
           type: string
-          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required, direct_https]
+          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, moved, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required, direct_https]
         who:
           $ref: "#/components/schemas/ActivityWho"
         what:

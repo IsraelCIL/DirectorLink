@@ -37,6 +37,8 @@ const ASSETS = [
   "/js/reorder.js",
   "/js/vendor/qrcodegen.js",
   "/js/views/join.js",
+  "/js/home-screen.js",
+  "/js/views/move.js",
   "/js/views/access.js",
   "/js/views/device-limit.js",
   "/js/views/permissions.js",

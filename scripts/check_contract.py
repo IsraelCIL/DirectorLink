@@ -592,6 +592,11 @@ def scenario(client, bridge):
     client.check("GET", "/v1/invitations", 200)
     client.check("POST", "/v1/invitations", 409, body={"role": "member"})
     client.check("POST", "/v1/invitations", 400, body={"role": "owner"})
+    # 1.12.0 (ADR-083): a new user's name, and a move invitation, are checked before remote access.
+    client.check("POST", "/v1/invitations", 400, body={"role": "member", "name": ""})
+    client.check("POST", "/v1/invitations", 400, body={"for_me": True, "name": "Me"})
+    client.check("POST", "/v1/invitations", 400, body={"move": True})
+    client.check("POST", "/v1/invitations", 409, body={"role": "member", "name": "Dana"})
     client.check("DELETE", "/v1/invitations/0123abcd", 404)
 
     # Profiles: the caller's own, and the admin's list; the home's room order.
@@ -748,6 +753,8 @@ def scenario(client, bridge):
         fail("GET /v1/system should say features.people_permissions")
     # Users and their devices (1.9.0, ADR-061): Settings → Users, five devices a user, a pairing
     # code for a chosen user, a suggestion that is not there.
+    if client.check("GET", "/v1/system", 200)["features"].get("user_names") is not True:
+        fail("GET /v1/system should say features.user_names (1.12.0)")
     if client.check("GET", "/v1/system", 200)["features"].get("users") is not True:
         fail("GET /v1/system should say features.users")
     users = client.check("GET", "/v1/users", 200)
@@ -821,6 +828,14 @@ def scenario(client, bridge):
     client.check("PUT", "/v1/rooms/order", 403, body={"room_ids": [10]})
     client.check("PATCH", "/v1/rooms/10", 403, body={"hidden_from_members": True})
     client.check("GET", "/v1/profile", 200)
+    # 1.12.0 (ADR-083): a member names themself, and renames their own devices, no one else's.
+    named = client.check("PATCH", "/v1/profile", 200, body={"name": "Second"})
+    if named["name"] != "Second" or named.get("name_from_device") is not False:
+        fail(f"a member names themself: {named}")
+    client.check("PATCH", "/v1/profile", 400, body={"name": ""})
+    client.check("PATCH", f"/v1/api-keys/{created['id']}", 200, body={"name": "Second phone"})
+    client.check("PATCH", f"/v1/api-keys/{me['id']}", 404, body={"name": "Not mine"})
+    client.check("PATCH", f"/v1/api-keys/{created['id']}", 403, body={"role": "admin"})
     if client.check("GET", "/v1/scenes", 200)["items"]:
         fail("a member lists only the scenes chosen for them")
     client.check("POST", f"/v1/scenes/{scene['id']}/run", 404)

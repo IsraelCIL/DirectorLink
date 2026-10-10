@@ -257,7 +257,7 @@ test("a member sees only their own user, removes their other device, and is told
   assert.match(textOf(view), /Your devices/);
   assert.equal(byKey(view, "access-edit-bbbb0003"), null, "a member changes no access");
   assert.equal(byKey(view, "users-pair-bbbb0003"), null);
-  assert.equal(byKey(view, "users-new-open"), null);
+  assert.equal(byKey(view, "users-add-open"), null);
   assert.match(textOf(view), /Add my other device in Settings → Account/);
   assert.match(textOf(view), /ask an admin to invite your Google or Apple account/);
   await press(view, "access-revoke-0a1b2c40");
@@ -306,15 +306,16 @@ test("a pairing code for a user, and for a new user with a name and access", asy
   await press(view, "users-pairing-close");
   assert.equal(calls("DELETE", "/v1/pairing-code").length, 1);
   assert.equal(byKey(accessView({}), "users-pairing"), null);
-  // A new user.
-  await press(accessView({}), "users-new-open");
+  // A new user (1.12.0: Add a user, a name and access, then the pairing code).
+  await press(accessView({}), "users-add-open");
   view = accessView({});
-  const name = byKey(view, "users-new-name");
+  const name = byKey(view, "users-add-name");
   name.value = "Kitchen tablet";
   name.listeners.input[0]();
-  byKey(view, "users-new-all-rooms").listeners.change[0]({ target: { checked: false } });
-  byKey(accessView({}), "users-new-room-10").listeners.change[0]({ target: { checked: true } });
-  await press(accessView({}), "users-new");
+  byKey(view, "users-add-all-rooms").listeners.change[0]({ target: { checked: false } });
+  byKey(accessView({}), "users-add-room-10").listeners.change[0]({ target: { checked: true } });
+  await press(accessView({}), "users-add");
+  await press(accessView({}), "users-add-code");
   const body = calls("POST", "/v1/pairing-code")[1].body;
   assert.equal(body.name, "Kitchen tablet");
   assert.equal(body.role, "member");

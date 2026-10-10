@@ -128,6 +128,22 @@
         <readonly>true</readonly>
       </property>
       <property>
+        <name>Direct HTTPS</name>
+        <type>LIST</type>
+        <items>
+          <item>Off</item>
+          <item>Allowed</item>
+        </items>
+        <default>Off</default>
+        <tooltip>Test build. Allowed lets DirectorLink also serve its API over HTTPS on port 28443, under a name of its own (Direct HTTPS Status), so that iPhones and iPads reach it at home without the account. In this test build Allowed alone turns it on; from 1.12 the homeowner then turns it on in the app. Off: no HTTPS server and no key.</tooltip>
+      </property>
+      <property>
+        <name>Direct HTTPS Status</name>
+        <default>Off</default>
+        <type>STRING</type>
+        <readonly>true</readonly>
+      </property>
+      <property>
         <name>Schedules</name>
         <type>LIST</type>
         <items>

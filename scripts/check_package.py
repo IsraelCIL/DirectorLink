@@ -31,6 +31,10 @@ REQUIRED_PROPERTIES = (
     "Alarm Status",
     "Remote Access",
     "Remote Status",
+    # The API over HTTPS on port 28443 under the home's own name (1.12.0 test build, ADR-082): the
+    # installer's switch, and its name and state.
+    "Direct HTTPS",
+    "Direct HTTPS Status",
     # What DirectorLink automates, visible to the installer (0.15.0): a pause switch, a summary
     # and the last run.
     "Schedules",
@@ -51,8 +55,10 @@ REQUIRED_PROPERTIES = (
 # The door switches ship off; an installer turns them on in Composer (ADR-025, ADR-036). So does
 # the Jewish calendar: with it off the driver works nothing out and the app shows none of it. And
 # the alarm's status: with it off the driver does not watch the alarm (ADR-038). And Sonos: with it
-# off the driver looks for no player and sends nothing to one (ADR-044).
-SAFE_DEFAULTS = {"Door Control": "Disabled", "Relay Hold": "Not allowed", "Jewish Calendar": "Off", "Alarm Status": "Off", "Sonos": "Off"}
+# off the driver looks for no player and sends nothing to one (ADR-044). And Direct HTTPS: with it
+# off the driver makes no key and opens no TLS server (ADR-082).
+SAFE_DEFAULTS = {"Door Control": "Disabled", "Relay Hold": "Not allowed", "Jewish Calendar": "Off", "Alarm Status": "Off", "Sonos": "Off",
+                 "Direct HTTPS": "Off"}
 
 # Refresh Project (1.1.0) reads the project again after changes in Composer, without a restart.
 # Remove All Scene Links (1.7.0, ADR-051) ends every scene's link at once.
@@ -64,6 +70,16 @@ SECURITY_CONTRACT = {
         "if not match.route.public then",
         'string.lower(scheme) ~= "bearer"',
         '["https://app.directorlink.io"] = true',
+        # The home's own name passes the Host check only on the Direct HTTPS server (ADR-082).
+        "return client ~= nil and client.secure == true and services.https ~= nil and services.https.hostAllowed(host) == true",
+    ),
+    # Direct HTTPS (1.12.0 test build, ADR-082): TLS 1.2 and 1.3, no client certificate asked for,
+    # exactly the home's name, and only its own server destroyed (DestroyServer() would end 41999's).
+    "src/api/direct_https.lua": (
+        "DirectHttps.TLS_OPTIONS = 0",
+        "DirectHttps.VERIFY_MODE = 1",
+        "C4:DestroyServer(DirectHttps.PORT)",
+        'return host == name or host == name .. ":" .. DirectHttps.PORT',
     ),
     "src/auth/keys.lua": (
         # Only hashes are stored, never the keys themselves.
@@ -426,11 +442,12 @@ def relay_roots_problem(data):
 
 def expected_versions():
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", version)
+    # A test build (MAJOR.MINOR.PATCH-test.N, never released) is one below its release (build.py).
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:-test\.(\d+))?$", version)
     if not match:
-        fail(f"VERSION must be MAJOR.MINOR.PATCH, got {version!r}")
-    major, minor, patch = (int(part) for part in match.groups())
-    return version, str(major * 10000 + minor * 100 + patch)
+        fail(f"VERSION must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-test.N, got {version!r}")
+    major, minor, patch = (int(part) for part in match.groups()[:3])
+    return version, str(major * 10000 + minor * 100 + patch - (1 if match.group(4) else 0))
 
 
 def check_reproducible(infos):

@@ -94,7 +94,7 @@ Use `localhost` as the controller address and the pairing code the dev server pr
 
 ## Versions
 
-`VERSION` holds `MAJOR.MINOR.PATCH` (for example `0.2.0`, no suffixes) and is the only file to edit for a release. The build stamps it into the package:
+`VERSION` holds `MAJOR.MINOR.PATCH` (for example `0.2.0`, no suffixes) and is the only file to edit for a release. A test build for a controller, never released, may say `MAJOR.MINOR.PATCH-test.N` (`1.12.0-test.1`): the build takes it, its `driver.xml` version is one below the release's (11199 for 1.12.0), so that the release updates it in Composer, and `release.yml` refuses to release it. The build stamps the version into the package:
 
 - `src/core/version.lua` → `Version.BRIDGE_VERSION = "0.2.0"` (the source keeps `"dev"`)
 - `driver.xml` `<version>` → `MAJOR*10000 + MINOR*100 + PATCH` (0.2.0 → 200), the increasing integer Control4 uses for driver updates

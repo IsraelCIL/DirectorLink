@@ -40,7 +40,9 @@ info:
 
     **Addresses and browsers.** Requests must be sent to the controller's IP address or a local name
     (e.g. `director.local`); any other `Host` is refused with `421 MISDIRECTED_REQUEST` (this stops
-    DNS rebinding). Browsers may call the API only from DirectorLink's own sites.
+    DNS rebinding). Browsers may call the API only from DirectorLink's own sites. With Direct HTTPS
+    (1.12.0 test build, tag HTTPS) the same API is also served over TLS on port 28443, where the
+    `Host` may also be exactly the home's own name under `dlhome.cc`.
 
     **Sealed requests.** The DirectorLink app does not send its key on the home network: it seals
     each request with its device's lock key and sends it to `POST /v1/sealed`, and pairs with CPace,
@@ -149,6 +151,14 @@ tags:
       Remote access with accounts (docs/ACCOUNTS.md): claiming this home for an account, and
       invitations. Requests that arrive through remote access are sealed end to end and run as the
       device's own key and role.
+  - name: HTTPS
+    description: |
+      Direct HTTPS (1.12.0 test build, ADR-082): the same API over TLS on port 28443, under a name of
+      the home's own (`<20 letters and digits>.dlhome.cc`, whose public DNS record points at the
+      controller's LAN address) with a publicly trusted certificate, so that iPhones and iPads reach
+      the controller from app.directorlink.io at home. Off unless the installer sets DirectorLink's
+      **Direct HTTPS** property to Allowed in Composer (in this test build that alone turns it on).
+      The controller makes its own key; its private key never leaves the controller.
 
 paths:
   /v1/health:
@@ -493,6 +503,107 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/https:
+    get:
+      tags: [HTTPS]
+      operationId: getDirectHttps
+      x-directorlink-role: admin
+      summary: Direct HTTPS status and certificate request
+      description: |
+        Whether Direct HTTPS is on, the home's name, the TLS server's state and the certificate in
+        use. `csr` (PEM) is given while the controller waits for a certificate, or with `csr=true`.
+        Never the private key. Requests on port 28443 go through the same Host check, CORS, keys,
+        sealing and routes as on 41999; the Host may also be exactly the home's name there.
+      parameters:
+        - name: csr
+          in: query
+          required: false
+          description: true gives the certificate request whatever the state.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: The status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectHttps"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/https/certificate:
+    put:
+      tags: [HTTPS]
+      operationId: setDirectHttpsCertificate
+      x-directorlink-role: admin
+      summary: Install the certificate for the controller's key
+      description: |
+        The certificate issued for the CSR of `GET /v1/https` (`certificate`, PEM), and the
+        certificates between it and a root (`chain`, PEM, as Let's Encrypt's `chain.pem`; or send
+        `fullchain.pem` as `certificate` and leave `chain` out). Refused unless its public key is the
+        controller's (`422 CERTIFICATE_KEY_MISMATCH`), it names the home's name (`422
+        CERTIFICATE_NAME_MISMATCH`) and has not expired (`422 CERTIFICATE_EXPIRED`), and at least one
+        issuer certificate comes with it. Kept on the controller; the TLS server on port 28443 is then
+        started again with it (`state` `starting`, then `listening`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DirectHttpsCertificate"
+      responses:
+        "200":
+          description: Installed; the status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectHttps"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: The certificate is not for this controller's key (`CERTIFICATE_KEY_MISMATCH`) or name (`CERTIFICATE_NAME_MISMATCH`), or it expired (`CERTIFICATE_EXPIRED`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/https/new-key:
+    post:
+      tags: [HTTPS]
+      operationId: newDirectHttpsKey
+      x-directorlink-role: admin
+      summary: A new key and certificate request for the same name
+      description: |
+        The controller forgets its key, its CSR and the certificate (the TLS server stops) and makes a
+        new key and CSR for the same name. Install a certificate for the new CSR afterwards.
+      responses:
+        "200":
+          description: The new status, with the new `csr`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectHttps"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -3786,7 +3897,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off).
+      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off; `HTTPS_OFF`, while its Direct HTTPS property is Off), or Direct HTTPS has no key (`HTTPS_NO_KEY`, test build).
       content:
         application/problem+json:
           schema:
@@ -3827,7 +3938,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Unavailable:
-      description: The bridge cannot serve this right now (`UNAVAILABLE`), or cannot seal remote requests (`LOCK_UNAVAILABLE`).
+      description: The bridge cannot serve this right now (`UNAVAILABLE`), or cannot seal remote requests (`LOCK_UNAVAILABLE`), or Director made no key for Direct HTTPS (`HTTPS_KEY_FAILED`, test build).
       content:
         application/problem+json:
           schema:
@@ -6701,6 +6812,63 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Refrigerator"
+
+    DirectHttps:
+      type: object
+      description: Direct HTTPS (1.12.0 test build, ADR-082). Never the private key.
+      required: [enabled, name, port, state, csr, certificate, error]
+      properties:
+        enabled:
+          type: boolean
+          description: The installer set DirectorLink's Direct HTTPS property to Allowed in Composer.
+        name:
+          type: [string, "null"]
+          pattern: "^[a-z2-7]{20}[.]dlhome[.]cc$"
+          description: The home's name, made with the first key and kept with later ones; null before.
+        port:
+          type: integer
+          const: 28443
+        state:
+          type: string
+          enum: ["off", waiting_for_certificate, starting, listening, error]
+          description: |
+            `off`: Direct HTTPS is Off. `waiting_for_certificate`: the key and CSR are made, no
+            certificate yet. `starting`: the TLS server was asked for and Director has not said it is
+            online (it retries a busy port every 10 s). `listening`: online. `error`: see `error`.
+        csr:
+          type: [string, "null"]
+          description: The certificate request (PEM, P-256, SHA-256, CN and DNS name the home's name), while waiting for a certificate or with `csr=true`.
+        certificate:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [not_after, issuer_cn]
+              properties:
+                not_after:
+                  type: [string, "null"]
+                  format: date-time
+                issuer_cn:
+                  type: [string, "null"]
+        error:
+          type: [string, "null"]
+          description: Why the state is `error` (for example "not supported on this OS"); else null.
+        warning:
+          type: [string, "null"]
+          description: Something to fix that does not stop it, such as an expired certificate, or a CSR whose curve public CAs refuse.
+
+    DirectHttpsCertificate:
+      type: object
+      additionalProperties: false
+      required: [certificate]
+      properties:
+        certificate:
+          type: string
+          maxLength: 16384
+          description: The certificate (PEM), possibly followed by its issuers (fullchain.pem).
+        chain:
+          type: [string, "null"]
+          maxLength: 16384
+          description: The issuers' certificates (PEM), as chain.pem.
 
     RemoteAccess:
       type: object

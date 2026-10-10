@@ -63,6 +63,7 @@ local suites = {
     "test_camera_drivers",
     "test_door_controllers",
     "test_doorbell_doors",
+    "test_https",
 }
 
 -- About how many seconds each suite takes (all of them in one run on a PC, 2026-10-03; CI takes
@@ -89,6 +90,7 @@ local SECONDS = {
     test_camera_drivers = 5,
     test_door_controllers = 13,
     test_doorbell_doors = 5,
+    test_https = 8,
     test_lock = 1,
     test_remote = 18,
     test_profiles = 3,

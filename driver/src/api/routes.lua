@@ -36,6 +36,12 @@ return {
     { method = "POST", path = "/v1/pairing-code", handler = "users.create_code", role = "admin" },
     { method = "DELETE", path = "/v1/pairing-code", handler = "users.delete_code", role = "admin" },
 
+    -- Direct HTTPS (1.12.0 test build, ADR-082): the API over TLS on port 28443 under the home's
+    -- own name; its status and certificate request, the certificate, a new key. Admins only.
+    { method = "GET", path = "/v1/https", handler = "https.status", role = "admin" },
+    { method = "PUT", path = "/v1/https/certificate", handler = "https.set_certificate", role = "admin" },
+    { method = "POST", path = "/v1/https/new-key", handler = "https.new_key", role = "admin" },
+
     { method = "GET", path = "/v1/remote", handler = "remote.status", role = "member" },
     { method = "POST", path = "/v1/remote/claim", handler = "remote.claim", role = "admin" },
     { method = "POST", path = "/v1/remote/secret", handler = "remote.secret", role = "admin" },

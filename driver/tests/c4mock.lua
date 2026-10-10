@@ -9,6 +9,7 @@ local sha1 = require("sha1")
 local sha256 = require("sha256")
 local aes = require("aes")
 local Base64 = require("src.core.base64")
+local X509Fake = require("x509_fake")
 
 -- The driver folder, which build.py packages as the .c4z root (this file is driver/tests/c4mock.lua).
 local DRIVER_ROOT = debug.getinfo(1, "S").source:match("^@(.-)[/\\]tests[/\\][^/\\]+$") or "./driver"
@@ -1057,6 +1058,13 @@ function Mock.install(project)
         -- System events registered: { eventId, deviceId }.
         systemEvents = {},
         servers = {},
+        -- Direct HTTPS (ADR-082): TLS servers, CSRs asked for, the private keys handed out, the
+        -- ports of servers destroyed.
+        tlsServers = {},
+        tlsCalls = {},
+        csrCalls = {},
+        privateKeys = {},
+        destroyedServers = {},
         timers = {},
         uuidCount = 0,
         clock = 5000,
@@ -1512,8 +1520,45 @@ function Mock.install(project)
         mock.servers[port] = { delimiter = delimiter, udp = udp }
     end
 
+    -- Direct HTTPS (ADR-082): the TLS servers made (mock.tlsServers by port, mock.tlsCalls in
+    -- order); mock.tlsFails makes the next ones fail with that text.
+    function C4:CreateTLSServer(port, delimiter, options, verifyMode, cipherList, certificate, privateKey, password, chain, identifier)
+        local server = {
+            port = port, delimiter = delimiter, options = options, verifyMode = verifyMode, cipherList = cipherList,
+            certificate = certificate, privateKey = privateKey, password = password, chain = chain, identifier = identifier,
+        }
+        mock.tlsCalls[#mock.tlsCalls + 1] = server
+        if mock.tlsFails then
+            return false, mock.tlsFails
+        end
+        mock.tlsServers[port] = server
+        return true
+    end
+
+    -- A key and CSR as Director makes them (OS 3.3.1 and newer: CSR, public key, private key), with
+    -- a made-up key (x509_fake.lua). mock.csrMode: "csr_only" (before OS 3.3.1), "fail", "explicit"
+    -- (the curve given by its parameters, as an old OpenSSL wrote it).
+    function C4:GenerateCSR_ECC(digest, curve, subject, extensions)
+        mock.csrCalls[#mock.csrCalls + 1] = { digest = digest, curve = curve, subject = subject, extensions = extensions }
+        if mock.csrMode == "fail" then
+            return nil, "EC key generation failed"
+        end
+        local seed = #mock.csrCalls + mock.uuidCount
+        local name = tostring(subject):match("CN=([^/]+)") or "unknown"
+        local point = X509Fake.point(seed)
+        local csr = X509Fake.pem(X509Fake.request(name, point, mock.csrMode == "explicit"), "CERTIFICATE REQUEST")
+        if mock.csrMode == "csr_only" then
+            return csr
+        end
+        local privateKey = X509Fake.privateKey(seed)
+        mock.privateKeys[#mock.privateKeys + 1] = privateKey
+        return csr, X509Fake.pem(X509Fake.spki(point), "PUBLIC KEY"), privateKey
+    end
+
     function C4:DestroyServer(port)
         mock.servers[port] = nil
+        mock.tlsServers[port] = nil
+        mock.destroyedServers[#mock.destroyedServers + 1] = port
     end
 
     function C4:ServerSend(handle, data)

@@ -33,6 +33,7 @@ li { margin-bottom: 4px; }
 <li><b>Door Control</b>: off until doors and gates may be opened from the app. <b>Relay Hold</b>: doors and gates are only pulsed unless allowed.</li>
 <li>Doors and gates are KNX Contact/Relay devices and Control4's <b>Relay Door, Gate and Garage Door Controllers</b>, whatever relay they drive: DirectorLink sends a controller only its own Open (set its Relay Configuration to Pulse), and shows open or closed when a contact is bound to it. A controller whose Open relay is a KNX Contact/Relay is that relay's door.</li>
 <li><b>Remote Access</b>: the app from anywhere, through the homeowner's account, locked end to end.</li>
+<li><b>Direct HTTPS</b> (test build): Off by default. Allowed lets DirectorLink also serve its API over HTTPS on port 28443, under a name of its own (<code>….dlhome.cc</code>), so that iPhones and iPads reach it at home without the account. In this test build Allowed alone turns it on; from 1.12 the homeowner then turns it on in the app. The controller makes its own key; an admin installs its certificate. <b>Direct HTTPS Status</b> shows the name and whether it listens.</li>
 <li><b>Schedules</b>: On, or Paused to stop every DirectorLink schedule; <b>Schedule Status</b> and <b>Last Automation</b> show what runs and what ran.</li>
 <li><b>Alarm Status</b>, <b>Sonos</b> and <b>Jewish Calendar</b>: off by default.</li>
 <li><b>Log Level</b>, and <b>Inventory</b> (rooms and devices found).</li>

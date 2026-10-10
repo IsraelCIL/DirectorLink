@@ -30,6 +30,7 @@ local Users = require("src.auth.users")
 local FavoritesGone = require("src.core.favorites_gone")
 local Pairing = require("src.auth.pairing")
 local Api = require("src.api.server")
+local DirectHttps = require("src.api.direct_https")
 local Relay = require("src.cloud.relay")
 local Remote = require("src.cloud.remote")
 local Invitations = require("src.auth.invitations")
@@ -263,6 +264,8 @@ local services = {
     invitations = Invitations,
     pairing = Pairing,
     log = Log,
+    -- Direct HTTPS (1.12.0 test build, ADR-082): the API over TLS on port 28443.
+    https = DirectHttps,
     -- Remote access with accounts (src/cloud/remote.lua, src/api/handlers/remote.lua).
     remote = {
         enabled = function()
@@ -620,6 +623,18 @@ function OnDriverLateInit(driverInitType)
     Api.init(services)
     local started = Api.start()
     updateProperty("API Status", started and "Starting..." or "Failed to start")
+    -- Direct HTTPS (ADR-082): nothing unless the installer allowed it in Composer.
+    local httpsStored = DirectHttps.configure({
+        log = Log,
+        enabled = function()
+            return Properties ~= nil and Properties[DirectHttps.PROPERTY] == DirectHttps.ALLOWED
+        end,
+        onStatus = function(text)
+            updateProperty(DirectHttps.STATUS_PROPERTY, text)
+        end,
+    })
+    Log.debug("https", "direct https loaded", { stored_as = httpsStored })
+    DirectHttps.apply()
 
     Log.info("lifecycle", "late init", { init_type = tostring(driverInitType) })
     if discover() then
@@ -819,6 +834,7 @@ local HISTORY_SETTINGS = {
     ["Relay Hold"] = true,
     [Alarm.PROPERTY] = true,
     [Sonos.PROPERTY] = true,
+    [DirectHttps.PROPERTY] = true,
 }
 
 function OnPropertyChanged(name)
@@ -862,6 +878,10 @@ function OnPropertyChanged(name)
     if (name == Sonos.PROPERTY or name == Sonos.ADDRESS_PROPERTY) and Properties and STATE.supported then
         Sonos.apply(name)
     end
+    if name == DirectHttps.PROPERTY and Properties and STATE.supported then
+        Log.info("https", "direct https " .. string.lower(tostring(Properties[name])) .. " in Composer")
+        DirectHttps.apply()
+    end
     if name == "Log Level" and Properties then
         if Log.setLevel(Properties[name]) then
             Log.info("logs", "log level changed from Composer", { level = Log.getLevel() })
@@ -904,16 +924,23 @@ function OnPoll(idBinding, nPort)
     Relay.onPoll(idBinding, nPort)
 end
 
-function OnServerStatusChanged(port, status)
+-- The API's server on 41999 (C4:CreateServer, no identifier) and, with Direct HTTPS, its TLS server
+-- on 28443 (identifier "https", ADR-082): Director calls the same callbacks for both, with the
+-- server's identifier last (OS 3.3.1 and newer). The data callback's port is the client's.
+function OnServerStatusChanged(port, status, identifier)
+    if DirectHttps.owns(port, identifier) then
+        DirectHttps.onStatusChanged(port, status)
+        return
+    end
     Api.onStatusChanged(port, status)
 end
 
-function OnServerConnectionStatusChanged(handle, port, status)
-    Api.onConnectionStatusChanged(handle, port, status)
+function OnServerConnectionStatusChanged(handle, port, status, _address, identifier)
+    Api.onConnectionStatusChanged(handle, port, status, DirectHttps.owns(port, identifier))
 end
 
-function OnServerDataIn(handle, data, clientAddress, clientPort)
-    Api.onData(handle, data, clientAddress, clientPort)
+function OnServerDataIn(handle, data, clientAddress, clientPort, identifier)
+    Api.onData(handle, data, clientAddress, clientPort, identifier == DirectHttps.IDENTIFIER)
 end
 
 function OnDriverDestroyed(driverInitType)
@@ -925,6 +952,7 @@ function OnDriverDestroyed(driverInitType)
     Activity.flush()
     Relay.stop()
     Sonos.shutdown()
+    DirectHttps.stop()
     Api.stop()
     AdapterManager.shutdown()
 end

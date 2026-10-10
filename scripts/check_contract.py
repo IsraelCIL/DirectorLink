@@ -1051,6 +1051,7 @@ def scenario(client, bridge):
         fail("the owner stays the owner when the account service did not agree")
     client.check("DELETE", f"/v1/api-keys/{partner['id']}", 204)
     bridge.set_property("Remote Access", "Off")
+    direct_https(client, bridge)
 
     # Sealed requests on the home network: what sealing needs, and refusals (the driver's own tests
     # open real ones). Pairing with a key exchange answers sealed.
@@ -1089,6 +1090,78 @@ def scenario(client, bridge):
     for _ in range(4):
         client.check("POST", "/v1/auth/pair", 403, body={"pairing_code": "00000000"})
     client.check("POST", "/v1/auth/pair", 429, body={"pairing_code": "00000000"})
+
+
+def der(tag, content):
+    """One DER element (lengths up to 65535)."""
+    size = len(content)
+    length = bytes([size]) if size < 128 else bytes([0x81, size]) if size < 256 else bytes([0x82, size >> 8, size & 0xFF])
+    return bytes([tag]) + length + content
+
+
+def der_children(data):
+    """The elements in `data`, each (tag, whole element, contents)."""
+    out, index = [], 0
+    while index < len(data):
+        first = data[index + 1]
+        header, size = (2, first) if first < 128 else (2 + first - 128, int.from_bytes(data[index + 2:index + first - 126], "big"))
+        out.append((data[index], data[index:index + header + size], data[index + header:index + header + size]))
+        index += header + size
+    return out
+
+
+def pem(der_bytes, label):
+    text = base64.b64encode(der_bytes).decode()
+    return f"-----BEGIN {label}-----\n" + "\n".join(text[i:i + 64] for i in range(0, len(text), 64)) + f"\n-----END {label}-----\n"
+
+
+def csr_public_key_info(csr):
+    """The SubjectPublicKeyInfo (DER) of a PEM certificate request."""
+    body = "".join(line for line in csr.strip().splitlines() if not line.startswith("-----"))
+    request = der_children(der_children(base64.b64decode(body))[0][2])[0][2]
+    return der_children(request)[2][1]
+
+
+def test_certificate(public_key_info, name, not_after="491231000000Z"):
+    """A certificate shaped as a CA issues one (made-up signature: DirectorLink checks none)."""
+    seq = lambda *parts: der(0x30, b"".join(parts))
+    oid = lambda hex_value: der(0x06, bytes.fromhex(hex_value))
+    common_name = lambda value: seq(der(0x31, seq(oid("550403"), der(0x0C, value.encode()))))
+    ecdsa_sha256 = seq(oid("2a8648ce3d040302"))
+    names = seq(seq(oid("551d11"), der(0x04, seq(der(0x82, name.encode())))))
+    tbs = seq(der(0xA0, der(0x02, bytes([2]))), der(0x02, bytes([1, 7])), ecdsa_sha256, common_name("Contract Test CA"),
+              seq(der(0x17, b"261001000000Z"), der(0x17, not_after.encode())), common_name(name), public_key_info, der(0xA3, names))
+    return pem(seq(tbs, ecdsa_sha256, der(0x03, bytes([0]) + seq(der(0x02, bytes([1]) * 32), der(0x02, bytes([2]) * 32)))), "CERTIFICATE")
+
+
+def direct_https(client, bridge):
+    """Direct HTTPS (1.12.0 test build, ADR-082): off as it ships; Allowed in Composer, the controller's
+    CSR, a certificate for it (and ones that are not), a new key."""
+    off = client.check("GET", "/v1/https", 200)
+    if off["state"] != "off" or off["enabled"] is not False or off["csr"] is not None:
+        fail(f"GET /v1/https should be off as DirectorLink ships: {off}")
+    client.check("PUT", "/v1/https/certificate", 409, body={"certificate": "none yet"})
+    client.check("POST", "/v1/https/new-key", 409)
+    bridge.set_property("Direct HTTPS", "Allowed")
+    waiting = client.check("GET", "/v1/https", 200)
+    if waiting["state"] != "waiting_for_certificate" or "BEGIN CERTIFICATE REQUEST" not in (waiting["csr"] or ""):
+        fail(f"GET /v1/https with Direct HTTPS Allowed should give the CSR: {waiting}")
+    other_key = der(0x30, der(0x30, der(0x06, bytes.fromhex("2a8648ce3d0201")) + der(0x06, bytes.fromhex("2a8648ce3d030107")))
+                    + der(0x03, bytes([0, 4]) + bytes(range(64))))
+    issuer = test_certificate(other_key, "Contract Test CA")
+    leaf = test_certificate(csr_public_key_info(waiting["csr"]), waiting["name"])
+    client.check("PUT", "/v1/https/certificate", 422, body={"certificate": test_certificate(other_key, waiting["name"]), "chain": issuer})
+    client.check("PUT", "/v1/https/certificate", 400, body={"certificate": leaf})
+    installed = client.check("PUT", "/v1/https/certificate", 200, body={"certificate": leaf, "chain": issuer})
+    if installed["state"] != "starting" or installed["certificate"] != {"not_after": "2049-12-31T00:00:00Z", "issuer_cn": "Contract Test CA"}:
+        fail(f"PUT /v1/https/certificate should start the TLS server with the certificate: {installed}")
+    if client.check("GET", "/v1/https?csr=true", 200)["csr"] != waiting["csr"]:
+        fail("GET /v1/https?csr=true should give the CSR")
+    client.check("GET", "/v1/https?csr=maybe", 400)
+    renewed = client.check("POST", "/v1/https/new-key", 200)
+    if renewed["name"] != waiting["name"] or renewed["csr"] == waiting["csr"] or renewed["certificate"] is not None:
+        fail(f"POST /v1/https/new-key should give a new CSR for the same name: {renewed}")
+    bridge.set_property("Direct HTTPS", "Off")
 
 
 def fahrenheit_scenario(client, bridge):

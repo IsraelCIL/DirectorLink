@@ -41,6 +41,7 @@ local HANDLERS = {
     backup = require("src.api.handlers.backup"),
     activity = require("src.api.handlers.activity"),
     alerts = require("src.api.handlers.alerts"),
+    https = require("src.api.handlers.https"),
 }
 
 local Server = {}
@@ -65,6 +66,9 @@ local STALE_CONNECTION_SECONDS = 30
 local router = Router.new(Routes)
 local services = nil
 local connections = {}
+-- Connections on the Direct HTTPS server (src/api/direct_https.lua, ADR-082), by handle, for a
+-- Director that does not pass the server's identifier with the data (before OS 3.3.1).
+local secureHandles = {}
 local listening = false
 local portCheck = nil
 -- True from start() to stop(): a port lost meanwhile is asked for again.
@@ -218,6 +222,7 @@ local function logAccess(request, route, status, client, started, apiKey)
         client = client and client.ip or Json.null,
         duration_ms = Clock.millis() - started,
         key_id = apiKey and apiKey.id or Json.null,
+        tls = client and client.secure or nil,
     })
 end
 
@@ -245,6 +250,12 @@ local function finalize(request, route, client, started, apiKey, origin, status,
     return status, headers, body
 end
 
+-- The Host of a request that came over Direct HTTPS may also be the home's own name (ADR-082); on
+-- port 41999 nothing more than Server.hostAllowed.
+local function secureHostAllowed(client, host)
+    return client ~= nil and client.secure == true and services.https ~= nil and services.https.hostAllowed(host) == true
+end
+
 -- Handles one parsed request and returns status, headers, body. A handler that must wait (a camera
 -- snapshot) answers later: then nothing is returned and respond(status, headers, body) is called.
 function Server.handleRequest(request, client, respond)
@@ -257,7 +268,8 @@ function Server.handleRequest(request, client, respond)
         status = 403
         payload = Problem.new(403, "ORIGIN_NOT_ALLOWED", "Requests from " .. tostring(origin) .. " are not allowed")
         origin = nil
-    elseif not request.principal and not Server.hostAllowed(request.headers["host"]) then
+    elseif not request.principal and not Server.hostAllowed(request.headers["host"])
+        and not secureHostAllowed(client, request.headers["host"]) then
         status = 421
         payload = Problem.new(421, "MISDIRECTED_REQUEST", "Reach DirectorLink by the controller's IP address or its local name")
         origin = nil
@@ -341,6 +353,7 @@ function Server.handleRequest(request, client, respond)
 end
 
 local function send(handle, status, headers, body)
+    secureHandles[handle] = nil
     local ok, err = pcall(function()
         C4:ServerSend(handle, Http.buildResponse(status, headers, body))
         C4:ServerCloseClient(handle)
@@ -354,6 +367,7 @@ local function dropStaleConnections(now)
     for handle, connection in pairs(connections) do
         if now - connection.openedAt > STALE_CONNECTION_SECONDS then
             connections[handle] = nil
+            secureHandles[handle] = nil
             pcall(function()
                 C4:ServerCloseClient(handle)
             end)
@@ -431,6 +445,7 @@ function Server.stop()
     end)
     listening = false
     connections = {}
+    secureHandles = {}
 end
 
 function Server.isListening()
@@ -458,13 +473,19 @@ function Server.onStatusChanged(port, status)
     end
 end
 
-function Server.onConnectionStatusChanged(handle, _port, status)
+-- `secure`: the connection is on the Direct HTTPS server (main.lua tells by its port or identifier).
+function Server.onConnectionStatusChanged(handle, _port, status, secure)
     if tostring(status) == "OFFLINE" then
         connections[handle] = nil
+        secureHandles[handle] = nil
+    elseif secure then
+        secureHandles[handle] = true
     end
 end
 
-function Server.onData(handle, data, clientAddress, clientPort)
+-- `secure`: the data came on the Direct HTTPS server (Director passed its identifier); the same
+-- parsing, Host check, CORS, keys, sealing and routing as on 41999.
+function Server.onData(handle, data, clientAddress, clientPort, secure)
     if not services then
         return
     end
@@ -474,7 +495,7 @@ function Server.onData(handle, data, clientAddress, clientPort)
         dropStaleConnections(now)
         connection = {
             parser = Http.newParser(),
-            client = { ip = clientAddress, port = clientPort },
+            client = { ip = clientAddress, port = clientPort, secure = (secure or secureHandles[handle]) and true or nil },
             openedAt = now,
         }
         connections[handle] = connection

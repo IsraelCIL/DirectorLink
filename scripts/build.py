@@ -34,7 +34,9 @@ SPEC_JSON = DIST / "openapi.json"
 # Where src/cloud/websocket.lua names the relay's CA file, relative to the package root.
 CA_FILE_PATTERN = re.compile(r'WebSocket\.CA_FILE = "\./([^"]+)"')
 
-VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+# MAJOR.MINOR.PATCH, or a test build of it: MAJOR.MINOR.PATCH-test.N (never released: release.yml
+# takes only MAJOR.MINOR.PATCH).
+VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-test\.(\d+))?$")
 SOURCE_VERSION_LINE = 'Version.BRIDGE_VERSION = "dev"'
 SPEC_MODULE = "src/api/openapi_spec.lua"
 
@@ -53,11 +55,17 @@ def read_version():
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     match = VERSION_PATTERN.match(version)
     if not match:
-        fail(f"VERSION must be MAJOR.MINOR.PATCH (e.g. 0.2.0), got {version!r}")
-    major, minor, patch = (int(part) for part in match.groups())
+        fail(f"VERSION must be MAJOR.MINOR.PATCH (e.g. 0.2.0), or MAJOR.MINOR.PATCH-test.N for a test build, got {version!r}")
+    major, minor, patch = (int(part) for part in match.groups()[:3])
     if minor > 99 or patch > 99:
         fail("minor and patch must be below 100 so the Control4 driver version stays increasing")
-    return version, major * 10000 + minor * 100 + patch
+    driver_version = major * 10000 + minor * 100 + patch
+    if match.group(4) is not None:
+        if not 1 <= int(match.group(4)) <= 99:
+            fail("a test build's number must be from 1 to 99")
+        # One below its release, so that the release itself updates a test build in Composer.
+        driver_version -= 1
+    return version, driver_version
 
 
 def stamped_driver_xml(driver_version):

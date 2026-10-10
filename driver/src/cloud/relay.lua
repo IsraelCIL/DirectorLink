@@ -128,6 +128,13 @@ local state = {
     heardSinceHello = false,
     heardTicks = 0,
     keepWindow = nil,
+    -- What this connection's relay said it does (`relay_features`, 1.10.1): feature -> true; an
+    -- empty table once it was heard without saying (a relay before 1.10.1); nil until then.
+    relayFeatures = nil,
+    -- Modules told of the relay's features at each connection (Relay.onFeatures), and of the
+    -- relay's messages of a type (Relay.on): Direct HTTPS (1.12.0, ADR-082).
+    featureListeners = {},
+    handlers = {},
 }
 
 local function log(level, message, data)
@@ -343,6 +350,18 @@ local function refuseRequest(message)
     })
 end
 
+-- What this connection's relay does is known (`features`: feature -> true): the modules that wait
+-- for it are told (Direct HTTPS asks for its certificate then, 1.12.0).
+local function featuresKnown(features)
+    state.relayFeatures = features
+    for _, listener in ipairs(state.featureListeners) do
+        local ok, err = pcall(listener, features)
+        if not ok then
+            log("warn", "a module failed on the relay's features", { error = tostring(err) })
+        end
+    end
+end
+
 -- Whether this connection's relay answers alerts is settled (1.10.1, ADR-073): `acks`. When it
 -- does, the alerts kept from the last connection (and those made while there was none) go now,
 -- oldest first, except one that went to a relay not known to answer alerts (src/cloud/outbox.lua);
@@ -362,15 +381,29 @@ local function settleAcks(acks)
 end
 
 -- What this relay does besides what every relay does (1.10.1, ADR-073), right after the hello:
--- {"type":"relay_features","id","features":["alert_acks"]}.
+-- {"type":"relay_features","id","features":["alert_acks"]}; since 1.12.0 also "https": it issues
+-- Direct HTTPS certificates (ADR-082).
 local function relayFeatures(message)
     local acks = false
+    local features = {}
     for _, feature in ipairs(type(message.features) == "table" and message.features or {}) do
+        if type(feature) == "string" and #feature <= 32 then
+            features[feature] = true
+        end
         if feature == Relay.ALERT_ACKS then
             acks = true
         end
     end
     settleAcks(acks)
+    featuresKnown(features)
+end
+
+-- A relay heard without saying what it does (before 1.10.1): it does nothing more.
+local function noFeatures()
+    settleAcks(false)
+    if state.relayFeatures == nil then
+        featuresKnown({})
+    end
 end
 
 local function onMessage(text, kind)
@@ -405,7 +438,16 @@ local function onMessage(text, kind)
     elseif state.acks == nil and (message.type == "accounts" or message.type == "alerts_gone") then
         -- What a relay sends after this driver's `keys`, which follow its hello: a relay that answers
         -- alerts says so before (it answers the hello first), so this one does not.
-        settleAcks(false)
+        noFeatures()
+    end
+    -- Messages for a module (Relay.on): Direct HTTPS's answers (1.12.0, ADR-082).
+    local handler = type(message.type) == "string" and state.handlers[message.type]
+    if handler then
+        local ok, err = pcall(handler, message)
+        if not ok then
+            log("warn", "a relay message failed", { type = message.type, error = tostring(err) })
+        end
+        return
     end
     -- Sealed requests, invitations, claims and links (remote.lua). Each runs once: one the relay
     -- sends again after a lost connection gets its first answer (answers.lua, ADR-072).
@@ -480,7 +522,7 @@ local function startKeepalive()
             if state.acks == nil and state.heardSinceHello then
                 state.heardTicks = state.heardTicks + 1
                 if state.heardTicks >= Relay.ACKS_TICKS then
-                    settleAcks(false)
+                    noFeatures()
                 end
             end
             state.quietTicks = state.quietTicks + 1
@@ -607,6 +649,7 @@ local function onOpen()
     -- Whether this connection's relay answers alerts is not known yet (1.10.1, ADR-073).
     state.connection = state.connection + 1
     state.acks = nil
+    state.relayFeatures = nil
     state.heardSinceHello = false
     state.heardTicks = 0
     send({ type = "hello", home = identity.home_id, version = Version.BRIDGE_VERSION, ping_s = math.floor(Relay.KEEPALIVE_MS / 1000), features = Relay.FEATURES, instance = state.instance })
@@ -976,6 +1019,31 @@ function Relay.connected()
     return state.enabled and state.connectedAt ~= nil
 end
 
+-- What this connection's relay said it does (feature -> true; empty for a relay before 1.10.1), or
+-- nil while not connected or before it said.
+function Relay.features()
+    if not Relay.connected() then
+        return nil
+    end
+    return state.relayFeatures
+end
+
+-- The number of the connection (one more at each that opens), to tell a new connection.
+function Relay.connectionNumber()
+    return state.connection
+end
+
+-- `listener(features)` is told at each connection once its relay said what it does (1.12.0).
+function Relay.onFeatures(listener)
+    state.featureListeners[#state.featureListeners + 1] = listener
+end
+
+-- `handler(message)` gets the relay's messages of `messageType` that answer no question of
+-- Relay.ask (1.12.0: Direct HTTPS's `https_certificate_result` and `https_result`).
+function Relay.on(messageType, handler)
+    state.handlers[messageType] = handler
+end
+
 -- Whether the account service turned this version away (426, ADR-059) and no connection has opened
 -- since, while Remote Access is on; and the minimum version it named (nil when it named none).
 function Relay.updateRequired()
@@ -1050,6 +1118,7 @@ function Relay.reset()
     state.minimumVersion = nil
     state.instance = nil
     state.connection = 0
+    state.relayFeatures = nil
     Answers.reset()
     Outbox.reset()
 end

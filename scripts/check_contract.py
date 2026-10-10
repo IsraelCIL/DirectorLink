@@ -592,6 +592,11 @@ def scenario(client, bridge):
     client.check("GET", "/v1/invitations", 200)
     client.check("POST", "/v1/invitations", 409, body={"role": "member"})
     client.check("POST", "/v1/invitations", 400, body={"role": "owner"})
+    # 1.12.0 (ADR-083): a new user's name, and a move invitation, are checked before remote access.
+    client.check("POST", "/v1/invitations", 400, body={"role": "member", "name": ""})
+    client.check("POST", "/v1/invitations", 400, body={"for_me": True, "name": "Me"})
+    client.check("POST", "/v1/invitations", 400, body={"move": True})
+    client.check("POST", "/v1/invitations", 409, body={"role": "member", "name": "Dana"})
     client.check("DELETE", "/v1/invitations/0123abcd", 404)
 
     # Profiles: the caller's own, and the admin's list; the home's room order.
@@ -748,6 +753,8 @@ def scenario(client, bridge):
         fail("GET /v1/system should say features.people_permissions")
     # Users and their devices (1.9.0, ADR-061): Settings → Users, five devices a user, a pairing
     # code for a chosen user, a suggestion that is not there.
+    if client.check("GET", "/v1/system", 200)["features"].get("user_names") is not True:
+        fail("GET /v1/system should say features.user_names (1.12.0)")
     if client.check("GET", "/v1/system", 200)["features"].get("users") is not True:
         fail("GET /v1/system should say features.users")
     users = client.check("GET", "/v1/users", 200)
@@ -821,6 +828,14 @@ def scenario(client, bridge):
     client.check("PUT", "/v1/rooms/order", 403, body={"room_ids": [10]})
     client.check("PATCH", "/v1/rooms/10", 403, body={"hidden_from_members": True})
     client.check("GET", "/v1/profile", 200)
+    # 1.12.0 (ADR-083): a member names themself, and renames their own devices, no one else's.
+    named = client.check("PATCH", "/v1/profile", 200, body={"name": "Second"})
+    if named["name"] != "Second" or named.get("name_from_device") is not False:
+        fail(f"a member names themself: {named}")
+    client.check("PATCH", "/v1/profile", 400, body={"name": ""})
+    client.check("PATCH", f"/v1/api-keys/{created['id']}", 200, body={"name": "Second phone"})
+    client.check("PATCH", f"/v1/api-keys/{me['id']}", 404, body={"name": "Not mine"})
+    client.check("PATCH", f"/v1/api-keys/{created['id']}", 403, body={"role": "admin"})
     if client.check("GET", "/v1/scenes", 200)["items"]:
         fail("a member lists only the scenes chosen for them")
     client.check("POST", f"/v1/scenes/{scene['id']}/run", 404)
@@ -1051,6 +1066,7 @@ def scenario(client, bridge):
         fail("the owner stays the owner when the account service did not agree")
     client.check("DELETE", f"/v1/api-keys/{partner['id']}", 204)
     bridge.set_property("Remote Access", "Off")
+    direct_https(client, bridge)
 
     # Sealed requests on the home network: what sealing needs, and refusals (the driver's own tests
     # open real ones). Pairing with a key exchange answers sealed.
@@ -1089,6 +1105,31 @@ def scenario(client, bridge):
     for _ in range(4):
         client.check("POST", "/v1/auth/pair", 403, body={"pairing_code": "00000000"})
     client.check("POST", "/v1/auth/pair", 429, body={"pairing_code": "00000000"})
+
+
+def direct_https(client, bridge):
+    """Direct HTTPS (1.12.0, ADR-082): not allowed as it ships; Allowed in Composer, still off until the
+    home's owner turns it on, which needs Remote Access and a home linked to an account (the dev
+    bridge has no relay); off always works."""
+    off = client.check("GET", "/v1/https", 200)
+    if off["state"] != "not_allowed" or off["allowed"] is not False or off["enabled"] is not False or off["name"] is not None:
+        fail(f"GET /v1/https should be not allowed as DirectorLink ships: {off}")
+    if client.check("PUT", "/v1/https", 409, body={"enabled": True})["code"] != "HTTPS_NOT_ALLOWED":
+        fail("PUT /v1/https while Composer says Off should be 409 HTTPS_NOT_ALLOWED")
+    bridge.set_property("Direct HTTPS", "Allowed")
+    allowed = client.check("GET", "/v1/https", 200)
+    if allowed["state"] != "off" or allowed["allowed"] is not True or allowed["enabled"] is not False or allowed["remote"] is not False:
+        fail(f"GET /v1/https with Direct HTTPS Allowed should be off until the owner turns it on: {allowed}")
+    if client.check("PUT", "/v1/https", 409, body={"enabled": True})["code"] != "REMOTE_ACCESS_NEEDED":
+        fail("PUT /v1/https without Remote Access should be 409 REMOTE_ACCESS_NEEDED")
+    client.check("PUT", "/v1/https", 400, body={"enabled": "yes"})
+    client.check("PUT", "/v1/https", 400, body={"enabled": False, "certificate": "x"})
+    switched = client.check("PUT", "/v1/https", 200, body={"enabled": False})
+    if switched["state"] != "off" or switched["certificate"] is not None:
+        fail(f"PUT /v1/https off should answer the state: {switched}")
+    if client.check("GET", "/v1/system", 200).get("direct_https", "missing") is not None:
+        fail("GET /v1/system should say direct_https null while nothing listens")
+    bridge.set_property("Direct HTTPS", "Off")
 
 
 def fahrenheit_scenario(client, bridge):

@@ -15,7 +15,9 @@ into one user when an admin confirms it (the account service tells the controlle
 an account, as an opaque tag per home, and the controller only suggests it), pairing codes made in the app for a chosen user, and members adding and removing
 their own devices, a join from another device approved on any device of the account; and the
 owner can hand the home to another admin, the account service following the controller's word
-(ADR-064).** The
+(ADR-064). 1.12.0 names a user when an admin adds them, the name staying on the controller; lets
+iPhones and iPads join in the Home Screen app, and a Safari tab move its place there; and names
+devices so that they tell apart (ADR-083).** The
 driver's side is `driver/src/cloud/` (`lock.lua`, `remote.lua`) and
 `driver/src/auth/invitations.lua`, the cloud's `cloud/src/accounts.js` and `cloud/src/homes.js`, the
 app's `app/js/lock.js`, `app/js/remote.js` and Settings → Account. The relay protocol is
@@ -60,7 +62,9 @@ device's key since 1.7.0, ADR-050) are in *6. Alerts* below.
 | Automatic backups (1.6.0) | opened with the backup password | sealed: their date, size and which password's key; **never** what they hold | makes them; cannot open them |
 | The backup password | while typed | **never** | **never** (only its public key) |
 | DirectorLink in numbers (1.7.0): homes linked, people with an account, driver downloads | the totals, like anyone | counts them once an hour; publishes the totals only (ADR-052) | sends nothing for them |
-| Joining from another device (1.7.0): the new device's label ("Safari on iPhone"), both devices' public keys | yes | yes, while the request lasts (10 minutes; deleted within a day) | no |
+| Joining from another device (1.7.0): the new device's label ("Safari on iPhone"; since 1.12.0 "DirectorLink app on iPhone" for the Home Screen app), both devices' public keys | yes | yes, while the request lasts (10 minutes; deleted within a day) | no |
+| A new user's name (1.12.0, ADR-083: Add a user's link) | the admin's device that adds them; the joining device, in the sealed answer to its join, with the home's name | **never**: an invitation is registered with its id, email and expiry only, as before | yes: with the invitation until it is used, then as the user's name |
+| Moving a Safari tab to the Home Screen app (1.12.0) | both, on the one iPhone or iPad | nothing new: a for-me invitation, a join, then one key fewer, which tells that a key of an account went right after another key of it was first used | which key takes the place of which, until the new key's first request (at most 7 days) |
 | Joining from another device (1.7.0): the invitation sent to the new device | yes (the two devices) | sealed: **never** what it holds | made it; sees an ordinary for-me invitation |
 | Joining from another device (1.8.0): the push that a new device asks | its own choice; the push, opened by its worker | nothing new: it made the request, and pushes only that a device of the account asks, the home, when and the request's id (never the label); and whether each browser wants the push | no |
 | DirectorLink's version on the controller | its own controller's (`GET /v1/system`) | yes, from every connection (`X-DirectorLink-Version`, the `hello`); since 1.8.0 it can refuse versions below a minimum it is set to (ADR-059), which teaches it nothing new | yes |
@@ -68,6 +72,10 @@ device's key since 1.7.0, ADR-050) are in *6. Alerts* below.
 | An alert sent again after a lost connection (1.10.1, ADR-073) | — | a random id per alert, kept 10 minutes (at most 200) so that it pushes each once, and whether an alert came again (that a connection ended while it was on its way: it saw each connection end already); never more of what it is about | its own sealed alerts not yet answered, in memory for up to 2 minutes |
 | Scene links (1.7.0): a link's id and secret | shown once, when an admin makes it; then only on the phones and tags it was given to | **its id and secret in transit, each time a phone uses it**, with the home, when, and whether it ran, partly ran, failed or found nothing to run; it keeps no secret, and logs each run (the home, the link's id, the status, the result word, how long) in Workers Logs for some days; which scene it runs, **never** | the link's id, a hash of its secret, its scene and the key that made it; every run in History |
 | Ask-before-opening links (1.8.0): a door's link that asks its person | shown once, when its person makes it; the question opened with the device's alert key | as a scene link's run: **its id and secret in transit**, when, and the result word (asked, waiting, nobody, doors_off, not_asked), so that it is an ask link; then a brief sealed `notify` for its person's key ids, so which keys a link asks; which door, and the question, **never** | the link's id, a hash of its secret, its door and the key that made it; every question and the opening that answered it in History |
+| Direct HTTPS (1.12.0, ADR-082): the home's own name (`<20 random letters and digits>.dlhome.cc`) | its home's, in `GET /v1/system` while it listens, and admins in `GET /v1/https` | yes, from the first certificate the controller asks for: bound to the home in D1 for good (`https_names`), with when its first certificate was issued; **and it is public**: Certificate Transparency logs list every certificate issued for it, with their dates, and anyone may look up its DNS record | yes |
+| Direct HTTPS: the controller's LAN address (a private IPv4 address such as 192.168.1.201) | — | yes, while Direct HTTPS is on: the controller sends it with each request and when it changes, and the Worker writes it as the name's public DNS record (DNS only), deleted when it is turned off. Anyone who knows the name can read it: a private address, which says nothing outside the home | yes |
+| Direct HTTPS: the certificate and its key | the certificate, as any browser that connects | the certificates (public anyway) and its ACME account's key; the controller's CSR in transit; **never** the controller's private key | the key (in its store, never sent, logged or backed up) and the certificate |
+| Requests on port 28443 at home (Direct HTTPS) | yes | **never**: they go from the device to the controller on the home network | yes |
 | When, and how much data, flows | yes | yes | yes |
 
 A stolen or hacked cloud database gives an attacker email addresses and which account belongs to
@@ -243,11 +251,12 @@ admin, without removing anyone (*Handing the home to another admin*, below).
 
 ### 2. Away from home
 
-The app tries the controller on the home network first, because that is faster. If the controller
-cannot be reached, and always on iPhone and iPad, the app sends locked envelopes to the cloud with
-the account's session. The cloud checks that the account is a member of the home and passes the
-envelope to the home's relay connection. The controller unlocks it, runs it as that key (with that
-key's role), locks the answer and sends it back.
+The app tries the controller on the home network first, because that is faster: since 1.12.0 at its
+own HTTPS name first, when the home's owner turned on Direct connection at home (ADR-082), then (not
+on iPhone and iPad) at its address. If the controller cannot be reached that way, the app sends
+locked envelopes to the cloud with the account's session. The cloud checks that the account is a
+member of the home and passes the envelope to the home's relay connection. The controller unlocks
+it, runs it as that key (with that key's role), locks the answer and sends it back.
 
 ### 3. Invitations: family, and the owner's own other devices
 
@@ -256,6 +265,9 @@ key's role), locks the answer and sends it back.
    own user). Since 1.9.0 (ADR-061) every user, a member too, invites their own other device, into
    their own user and within five devices, and an admin may invite the account of an existing user
    (Settings → Users → Invite their account: the device that opens the link joins that user).
+   Since 1.12.0 (ADR-083) an admin adds a user in one place, Settings → Users → **Add a user**: a
+   name and their access first, then **Send a link** (the email of their Google or Apple account)
+   or a pairing code at home (*5.* below); Settings → Account keeps only Add my other device.
 2. The admin's app asks the controller, locally or through the lock, for an invitation. The
    controller creates an invitation id and a random secret `I`, and remembers the role and the
    expiry.
@@ -279,8 +291,12 @@ key's role), locks the answer and sends it back.
    below). Then it passes on the person's first envelope, which is locked with keys derived from
    `I` (`HMAC-SHA256(I, "DirectorLink invite v1")`).
 5. The controller checks the invitation (unused, not expired), creates a new API key with the
-   invitation's role (since 1.8.0 a new person with the invitation's role and permissions) and
-   returns it inside the locked answer. The invitation is used up.
+   invitation's role (since 1.8.0 a new person with the invitation's role and permissions; since
+   1.12.0 named as the admin chose, else after the device) and returns it inside the locked answer,
+   since 1.12.0 with the user it joined (`user`: id and name) and the home's name (the project's
+   site), which the app shows: "You joined Cohen Home as Dana." The invitation is used up. The
+   user's name is the controller's: the cloud is never told it, and the app learns it only in this
+   sealed answer, so the page cannot say it before the join.
 
 A link lasts 7 days and works once (*my other device*: 10 minutes). Whoever intercepts a link
 still has to sign in as the invited email, or be approved by the home's owner, who compares a code
@@ -336,7 +352,7 @@ uses to let it in, without a link:
 
 1. On the Connect screen, **Join from another device**. The new device makes an X25519 key pair and
    sends the cloud a request for that home with its label (its browser's own description, e.g.
-   *Home Screen app on iPhone*) and a **commitment**: the SHA-256 of its public key, not the key.
+   *DirectorLink app on iPhone*; *Home Screen app on iPhone* before 1.12.0) and a **commitment**: the SHA-256 of its public key, not the key.
    The app says to open DirectorLink on a device already in use.
 2. A device of the same account that reaches the home with an admin key (the rule of *Add my other
    device*, once the controller has said the key's role; since 1.9.0 any key of the account, when the
@@ -377,10 +393,40 @@ session could ask too, under any label: the account's devices would show a reque
 ("Didn't ask? Decline it and sign out everywhere in Settings → Account."), and approving it would
 take the code on the asker's own screen, which the person does not see.
 
-**Paste invitation link** (the Connect screen, and Settings → Account) brings a link that opened
-elsewhere into the Home Screen app: it reads the clipboard (iOS shows its Paste button) or, where
-that is refused or holds no link, takes it in a field; a whole link, a message with one in it, or
-only the part after `#/join/`. The secret still never reaches a server.
+**Join with an invitation** (the Connect screen, and Settings → Account; *Paste invitation link*
+before 1.12.0) brings a link that opened elsewhere into the Home Screen app: its **Paste** reads the
+clipboard only after that tap (iOS shows its Paste button), and its field takes the link where that
+is refused or holds no link; a whole link, a message with one in it, or only the part after
+`#/join/`. The secret still never reaches a server.
+
+### iPhone and iPad: the Home Screen app (1.12.0, ADR-083)
+
+iOS gives the app added to the Home Screen its own storage, apart from Safari's, and alerts work only
+there. A device that joined in Safari has a key the Home Screen app never sees, and joining again
+there gave the same iPad two keys, one of them dead, toward its user's five devices. So:
+
+1. **An invitation's link opened in a browser on iPhone or iPad** (not in the Home Screen app), or
+   Add my other device's, first recommends joining in the Home Screen app: **Copy link**; Share,
+   then Add to Home Screen; open DirectorLink from the Home Screen, sign in, tap **Join with an
+   invitation** and paste. **Join here in Safari** joins in the browser, as before.
+2. **Move to the Home Screen app** (Settings → Account, on a Safari tab that has a key, with a
+   1.12.0 controller): the tab asks its controller for a **move invitation** (`for_me` and `move`),
+   this same user's, for 10 minutes and once, registered with the account service as Add my other
+   device's is. The person copies the link and pastes it in the Home Screen app's Join with an
+   invitation. The device that joins with it is a device of the same user, with the same access;
+   the controller revokes **the key that made the move, and only it**, at the new key's **first
+   sealed request**, and only while both are devices of the same user: a join whose answer was lost
+   on its way leaves both keys, never neither. The user keeps as many devices (five do not refuse a
+   move). The Safari tab asks every 5 seconds while the link waits, and when it comes back to the
+   front, whether its key still works; once it does not, it says "Moved to the Home Screen app.
+   Open DirectorLink from your Home Screen." History says `moved`.
+3. **Names that tell devices apart:** a browser is "Safari on iPad", the Home Screen app (or an
+   installed app elsewhere) "DirectorLink app on iPad". Every user renames their own devices, and
+   names themself (Settings → Users); a user still named after a device is asked once, at the top
+   of Settings, for their name. A device not used for 30 days says so, next to its Remove.
+
+The cloud learns nothing new: no name, and a move is an invitation, a join and a key revoked, as
+Add my other device and a removal would be.
 
 ### 4. Removing someone, or a lost phone
 
@@ -659,6 +705,11 @@ Cloudflare D1 (SQLite), next to the relay's Durable Objects:
   ids have none left (`alerts_gone`, ADR-062). The home's Durable Object keeps the admin key ids
   the controller last listed, and when it last notified (60 an hour at most).
 - `stats` (1.7.0, ADR-052, `migrations/0010`): three totals and when each was last counted (below).
+- `https_names` (1.12.0, ADR-082, `migrations/0011`): each home's Direct HTTPS name, which home it
+  belongs to (for good, so that no other home can ask for it), when it was first asked for and when
+  its first certificate was issued. The home's Durable Object keeps the controller's LAN address
+  while Direct HTTPS is on, the name's certificates (public anyway), when it last ordered one (the
+  last week's, for the limits) and the ACME account's URL; Cloudflare's DNS has the name's A record.
 - No device data, no keys and no message contents. The hash of each home's connection secret is
   in the relay's Durable Object storage.
 
@@ -692,7 +743,7 @@ The website asks for them from the visitor's browser, without cookies.
 
 In `docs/RELAY.md`: `e2e`, `join` and `claim` from the relay, answered with `e2e`, `join_result` and
 `claim_result`; `invitation` (answered `invitation_result`) and `invitation_cancel` from the
-controller (1.0.0); `backup_chunk` (answered `backup_result`) from the controller (1.6.0). Version 0's plain requests are refused (410
+controller (1.0.0); `backup_chunk` (answered `backup_result`) from the controller (1.6.0); `https_certificate` and `https` (answered `https_certificate_result` and `https_result`) from the controller, for Direct HTTPS (1.12.0, ADR-082). Version 0's plain requests are refused (410
 `RELAY_REQUESTS_RETIRED`) and its test endpoints are off in production. Roles come from the
 device's key.
 
@@ -777,11 +828,20 @@ device's key.
 
 ## iPhone and iPad
 
-They cannot use the home-network connection: WebKit blocks it (see the README). With this design
-they always go through the cloud, locked, even at home. The owner still has to claim the home once
-from a computer or an Android phone; the owner's iPhone then joins as *my other device*, or (1.7.0)
-with **Join from another device**, which the Home Screen app needs: it gets no links (*Join from
-another device*, above).
+They cannot use the home-network connection at the controller's address: WebKit blocks it (see the
+README). Until 1.12.0 they always went through the cloud, locked, even at home. Since 1.12.0, when
+the installer allows **Direct HTTPS** in Composer and the home's owner turns on Direct connection at
+home (Settings → Controller, ADR-082), the controller serves the same API over HTTPS on port 28443
+under the home's own name, with a Let's Encrypt certificate the cloud gets for it: they reach it
+there on the home network, sealed the same way, and go through the cloud only away from home
+(`app/README.md`, Direct connection at home). The cloud learns the name and the controller's LAN
+address (*Who knows what*). A router with DNS rebinding protection hides that name's private
+address: the app then stays on the cloud until `dlhome.cc` is allowed in the router. The owner still
+has to claim the home once from a computer or an Android phone; the owner's iPhone then joins as
+*my other device*, or (1.7.0) with **Join from another device**, which the Home Screen app needs: it
+gets no links (*Join from another device*, above). Since 1.12.0 a link opened in Safari recommends the Home Screen app, which
+takes it with **Join with an invitation**, and a Safari tab that joined moves there (*iPhone and
+iPad: the Home Screen app*, above).
 
 ## Phases
 
@@ -859,7 +919,8 @@ and the notification endpoint `https://api.directorlink.io/auth/apple/notificati
     for them.
 16. (1.7.0, ADR-053) A new device of the account joins by approval from a device that reaches the
     home with an admin key (since 1.9.0 any key of the account), after both show the same code; the new device commits to its key first,
-    and the invitation reaches it sealed. Paste invitation link brings a link into the Home Screen app.
+    and the invitation reaches it sealed. Paste invitation link (Join with an invitation since 1.12.0)
+    brings a link into the Home Screen app.
 17. (1.9.0, ADR-061) The cloud tells the controller which of its keys share an account, as an opaque
     tag per account and home; the controller only suggests bringing an account's devices into one
     user, and an admin confirms exactly what was shown (the owner for the owner's user): the cloud
@@ -870,3 +931,8 @@ and the notification endpoint `https://api.directorlink.io/auth/apple/notificati
     controller decides who its owner is, and the account service moves its owner account to the new
     owner's only on the controller's word, over its connection; a new owner without an account of
     the home is refused while an account owns it.
+19. (1.12.0, ADR-083) An admin adds a user with a name and their access, then a link or a pairing
+    code; the name stays on the controller and reaches the joining device only sealed. iPhones and
+    iPads join in the Home Screen app, and a Safari tab moves its place there: the key that made the
+    move goes at the new key's first request, only it and only within the same user. Devices are
+    named so that they tell apart, renamed by their user, and a user names themself.

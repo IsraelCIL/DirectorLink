@@ -276,6 +276,9 @@ function title(entry) {
     // The owner made another admin the owner (1.9.0, ADR-064).
     case "access.owner_changed":
       return withName("history.access.owner_changed", what, { from: isolate(entry.from) });
+    // A device moved to another of the same user, Safari to the Home Screen app (1.12.0, ADR-083).
+    case "access.moved":
+      return withName("history.access.moved", what, { from: isolate(entry.from) });
     case "composer.project": {
       const changes = entry.changes || [];
       const count = changes.length + (entry.more || 0);

@@ -172,7 +172,8 @@ test("a driver that keeps its alerts hears that the relay answers them; one befo
     const found = state.connection.got.filter((message) => message.type === "relay_features");
     return found.length ? found : null;
   }, "relay_features");
-  assert.deepEqual(features.features, ["alert_acks"]);
+  // Since 1.12.0 also that it issues Direct HTTPS certificates (ADR-082, https.test.mjs).
+  assert.deepEqual(features.features, ["alert_acks", "https"]);
   assert.match(features.id, /^[0-9a-f-]{36}$/, "an id, as every message the relay sends");
   assert.equal(state.connection.got[0].type, "relay_features", "before anything else the hello lets the relay send");
 

@@ -40,7 +40,9 @@ info:
 
     **Addresses and browsers.** Requests must be sent to the controller's IP address or a local name
     (e.g. `director.local`); any other `Host` is refused with `421 MISDIRECTED_REQUEST` (this stops
-    DNS rebinding). Browsers may call the API only from DirectorLink's own sites.
+    DNS rebinding). Browsers may call the API only from DirectorLink's own sites. With Direct HTTPS
+    (1.12.0, tag HTTPS) the same API is also served over TLS on port 28443, where the `Host` may also
+    be exactly the home's own name under `dlhome.cc` (`direct_https` in `GET /v1/system`).
 
     **Sealed requests.** The DirectorLink app does not send its key on the home network: it seals
     each request with its device's lock key and sends it to `POST /v1/sealed`, and pairs with CPace,
@@ -149,6 +151,17 @@ tags:
       Remote access with accounts (docs/ACCOUNTS.md): claiming this home for an account, and
       invitations. Requests that arrive through remote access are sealed end to end and run as the
       device's own key and role.
+  - name: HTTPS
+    description: |
+      Direct HTTPS (1.12.0, ADR-082): the same API over TLS on port 28443, under a name of the home's
+      own (`<20 letters and digits>.dlhome.cc`, whose public DNS record points at the controller's
+      LAN address) with a publicly trusted certificate (Let's Encrypt), so that iPhones and iPads
+      reach the controller from app.directorlink.io at home. Two switches: the installer sets
+      DirectorLink's **Direct HTTPS** property to Allowed in Composer, then the home's owner turns it
+      on (`PUT /v1/https`). It needs Remote Access and a home linked to an account: the controller
+      makes its own key and asks DirectorLink's servers for the certificate, which also keep the
+      name's DNS record. The private key never leaves the controller. Where to reach it is
+      `direct_https` in `GET /v1/system`.
 
 paths:
   /v1/health:
@@ -433,9 +446,12 @@ paths:
     patch:
       tags: [Auth]
       operationId: updateApiKey
-      x-directorlink-role: admin
+      x-directorlink-role: member
       summary: Rename an API key, move it to another person, or set a 1.7.0 role
       description: |
+        Since 1.12.0 (ADR-083) a member renames the devices of their own user (`name` only): any
+        other key is, for them, one that does not exist (`404`), and `role` or `profile_id` is
+        refused (`403 FORBIDDEN`). An admin renames any device, the owner's too.
         A key has its person's permissions (ADR-054): `profile_id` moves it to another person, and
         it then has theirs. `role`, as DirectorLink 1.7.0 clients send it, changes the key's person
         (all of their devices) into what that role became in 1.8.0, unless the key has that role
@@ -493,6 +509,68 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/https:
+    get:
+      tags: [HTTPS]
+      operationId: getDirectHttps
+      x-directorlink-role: admin
+      summary: Direct HTTPS's state
+      description: |
+        Whether the installer allowed it (`allowed`), whether the home's owner turned it on
+        (`enabled`), whether what it needs is there (`remote`), the home's name, the state and the
+        certificate in use. Never the private key, nor the certificate request. Requests on port
+        28443 go through the same Host check, CORS, keys, sealing and routes as on 41999; the Host may
+        also be exactly the home's name there.
+      responses:
+        "200":
+          description: The state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectHttps"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags: [HTTPS]
+      operationId: setDirectHttps
+      x-directorlink-role: admin
+      summary: The home's owner turns Direct HTTPS on or off
+      description: |
+        Only the home's owner (ADR-064; `403 OWNER_ONLY` for anyone else), once the installer has
+        allowed it in Composer (`409 HTTPS_NOT_ALLOWED` while the property says Off). On needs Remote
+        Access on and the home linked to an account (`409 REMOTE_ACCESS_NEEDED`): the controller then
+        makes its name and key once, asks DirectorLink's servers for a certificate (`state`
+        `requesting`) and serves the API on port 28443 once it has one (`listening`, tens of seconds
+        later). Off stops the TLS server (2 s after this answer, which may go over it), forgets the
+        certificate and has DirectorLink's servers delete the name's DNS record; the name and the key
+        stay for the next time. In the history
+        (`system` `direct_https`, `to` `on` or `off`). The same switch again changes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DirectHttpsSwitch"
+      responses:
+        "200":
+          description: Switched; the state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectHttps"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -622,6 +700,16 @@ paths:
         With `email`, the controller registers the invitation with the account service first; if
         that fails (`REMOTE_OFFLINE`, or the service's own code with 502) the invitation is
         revoked, since its link could not work.
+        Since 1.12.0 (ADR-083) an admin's invitation for a new user may name that user (`name`):
+        whoever accepts it becomes a user of that name (without it, one named after their device, as
+        before). The name stays on the controller: the account service is told the invitation's id,
+        email and expiry only, and the joining device reads the name in the sealed answer to its
+        join (`user`, with `home_name`, the project's site). A move invitation (`for_me` and `move`,
+        any user, 10 minutes at most and by default, one per device: a new one replaces the one
+        before) is for this same device's place: the device that accepts it joins this user, and
+        the key that made it is revoked at the new key's first sealed request (only that key, and
+        only while both are devices of the same user), so the user's devices stay as many; five
+        devices do not refuse it. Revoking the key that made it revokes it too.
       requestBody:
         required: true
         content:
@@ -698,11 +786,12 @@ paths:
       tags: [Profiles]
       operationId: updateProfile
       x-directorlink-role: member
-      summary: Change the caller's preferences
+      summary: Change the caller's preferences, or their name
       description: |
         Changes the named preferences; `null` clears one, others keep their values. With `version`,
         the change applies only if the profile has not changed since that version was read
-        (otherwise 409 `VERSION_CONFLICT`).
+        (otherwise 409 `VERSION_CONFLICT`). Since 1.12.0 (ADR-083) `name` renames the caller's own
+        user, any user, the owner too (admins rename anyone with `PATCH /v1/profiles/{profileId}`).
       requestBody:
         required: true
         content:
@@ -3786,7 +3875,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off).
+      description: The request conflicts with what the device supports or with current limits (`NOT_SUPPORTED`, `MODE_NOT_SUPPORTED`, `POSITION_NOT_SUPPORTED`, `STOP_NOT_SUPPORTED`, `FEATURE_NOT_SUPPORTED`, `HOLD_NOT_ALLOWED`, `KEY_LIMIT_REACHED`, `REMOTE_ACCESS_OFF`, `INVITATION_LIMIT_REACHED`, `SCENE_LIMIT_REACHED`, `SCENE_IN_USE`, `SCHEDULE_LIMIT_REACHED`, `VERSION_CONFLICT`, `LIMIT_REACHED`, `ASK_LINK_LIMIT_REACHED`, `USER_DEVICE_LIMIT` (since 1.9.0 a user has at most five devices; with `limit`, `user` and, for a caller who sees that user, `devices`), `SUGGESTION_CHANGED` (a suggestion to make devices of one account one user changed since it was shown, 1.9.0), `ALREADY_OWNER`, `NOT_AN_ADMIN`, `OWNER_NEEDS_ACCOUNT`, `OWNER_ACCOUNT_UNCLEAR`, `OWNER_ACCOUNT_SHARED` (making another admin the owner, 1.9.0, ADR-064, with `user`, and `device_names` for the last two); an open request that is over, `OPEN_REQUEST_EXPIRED`, or answered, `OPEN_REQUEST_ANSWERED`), a Sonos player refused it (`ACTION_NOT_POSSIBLE`, `FAVORITE_NOT_PLAYABLE`), or it needs something an installer switches on in Composer (`JEWISH_CALENDAR_OFF`, while DirectorLink's Jewish Calendar property is Off; `SONOS_OFF`, while its Sonos property is Off; `HTTPS_NOT_ALLOWED`, while its Direct HTTPS property is Off), or Direct HTTPS needs Remote Access on and the home linked to an account (`REMOTE_ACCESS_NEEDED`, 1.12.0).
       content:
         application/problem+json:
           schema:
@@ -3821,7 +3910,8 @@ components:
         The API key's role does not allow this (`FORBIDDEN`, with `role` and `required_role`), or
         door control is switched off in Composer (`DOOR_CONTROL_DISABLED`), or a claim token was
         asked for through remote access (`CLAIM_ONLY_ON_HOME_NETWORK`), or the alarm's status or a
-        backup was asked for without sealing the request (`SEALED_REQUEST_REQUIRED`).
+        backup was asked for without sealing the request (`SEALED_REQUEST_REQUIRED`), or only the
+        home's owner may do it (`OWNER_ONLY`).
       content:
         application/problem+json:
           schema:
@@ -3994,6 +4084,14 @@ components:
             schedules' thresholds, "only if") — Composer's, as Director reports it; else the one most
             thermostats work in; else C. Since 1.10.2 (ADR-076); missing before (then °C).
             Thresholds stay °C in the API.
+        direct_https:
+          description: >-
+            Direct HTTPS (1.12.0, ADR-082), for every key: where this API is also served over HTTPS at
+            home (`https://<name>:<port>`), only while the TLS server listens with a certificate valid
+            now; else null. Missing before 1.12.0.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/DirectHttpsEndpoint"
         inventory:
           type: object
           description: What the home has; for a member (1.8.0, ADR-054) only what they see, their rooms and the devices there that they see.
@@ -4093,6 +4191,9 @@ components:
             scene_levels_dimmers_only:
               type: boolean
               description: "Always true since ADR-077's change of 2026-10-09: a lights scene step with a level above 0 for a room or the whole home (no `device_ids`) goes to dimmers only, and on/off lights there stay as they are (skipped, `ON_OFF_ONLY`, counted in the run's `on_off_only`); one the step names still turns on. Missing before, when such a step turned them on."
+            user_names:
+              type: boolean
+              description: "Always true since 1.12.0: an invitation names the new user (`name`), a user names themself (`PATCH /v1/profile` `name`, and `name_from_device` in `GET /v1/profile`) and renames their own devices (`PATCH /v1/api-keys/{keyId}` by a member), and a device moves to another device of the same user (a move invitation) (ADR-083). Missing before 1.12.0."
 
     PairRequest:
       oneOf:
@@ -5648,6 +5749,9 @@ components:
         access:
           $ref: "#/components/schemas/PersonAccess"
           description: Since 1.8.0 (ADR-054). In `/v1/profile` what the caller may do; in `/v1/profiles` each person's role and permissions.
+        name_from_device:
+          type: boolean
+          description: "Since 1.12.0 (ADR-083), in the caller's own profile only (GET and PATCH /v1/profile): the user's name is still the name of one of their devices (a user made by a device that joined or paired is named after it); the app then asks once for their name."
         gone_favorites:
           type: array
           description: |
@@ -5694,9 +5798,15 @@ components:
 
     ProfileUpdate:
       type: object
-      required: [prefs]
+      minProperties: 1
       additionalProperties: false
+      description: "`prefs`, `name` (since 1.12.0), or both."
       properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The caller's own user's name (since 1.12.0, ADR-083).
         prefs:
           type: object
           additionalProperties: false
@@ -6702,6 +6812,81 @@ components:
           items:
             $ref: "#/components/schemas/Refrigerator"
 
+    DirectHttps:
+      type: object
+      description: Direct HTTPS (1.12.0, ADR-082). Never the private key, nor the certificate request.
+      required: [allowed, enabled, remote, name, port, state, certificate, error]
+      properties:
+        allowed:
+          type: boolean
+          description: The installer set DirectorLink's Direct HTTPS property to Allowed in Composer.
+        enabled:
+          type: boolean
+          description: The home's owner turned it on (`PUT /v1/https`); false while it is not allowed.
+        remote:
+          type: boolean
+          description: Remote Access is on in Composer and the home is linked to an account, which turning it on needs (the certificate comes through DirectorLink's servers).
+        name:
+          type: [string, "null"]
+          pattern: "^[a-z2-7]{20}[.]dlhome[.]cc$"
+          description: The home's name, made the first time it is turned on and kept from then on; null before.
+        port:
+          type: integer
+          const: 28443
+        state:
+          type: string
+          enum: [not_allowed, "off", requesting, listening, error]
+          description: |
+            `not_allowed`: the Composer property is Off. `off`: allowed, and the owner has not turned it
+            on. `requesting`: on, and the controller is asking DirectorLink's servers for a certificate
+            (or waits for its connection, or for Director to start the TLS server). `listening`: the
+            TLS server on port 28443 is online with a certificate valid now. `error`: see `error`.
+        certificate:
+          description: The certificate the controller has (while on), or null.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [not_after, issuer_cn]
+              properties:
+                not_after:
+                  type: [string, "null"]
+                  format: date-time
+                issuer_cn:
+                  type: [string, "null"]
+                  description: Its issuer's name, such as YE1.
+        error:
+          type: [string, "null"]
+          description: |
+            What keeps it from working, for the owner word for word: a short sentence or two in
+            English, never a code alone (for example "Let's Encrypt didn't issue the certificate.
+            Trying again in 15 minutes."); also while `listening`, when the next certificate could not
+            be had yet. Null otherwise.
+
+    DirectHttpsSwitch:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: true turns Direct HTTPS on, false off.
+
+    DirectHttpsEndpoint:
+      type: object
+      description: Where the app reaches this API over HTTPS at home (1.12.0, ADR-082).
+      required: [name, port, not_after]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z2-7]{20}[.]dlhome[.]cc$"
+        port:
+          type: integer
+          const: 28443
+        not_after:
+          type: string
+          format: date-time
+          description: When its certificate expires.
+
     RemoteAccess:
       type: object
       required: [enabled, connected, lock, home_id]
@@ -7020,6 +7205,14 @@ components:
             the account service itself before answering (`registered: true`); without it, the
             home's owner registers it from the app. A member's (`for_me`) only for an account that
             already uses the member's device at the home (`403 ACCOUNT_NOT_OF_DEVICE`).
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The new user's name (since 1.12.0, ADR-083), kept on the controller only; not with `for_me` or `profile_id`. 1 to 64 characters.
+        move:
+          type: boolean
+          description: With `for_me` (since 1.12.0, ADR-083), a move invitation for this device's place in its user; it lasts 10 minutes at most.
 
     Invitation:
       type: object
@@ -7050,6 +7243,12 @@ components:
         access:
           $ref: "#/components/schemas/PersonAccess"
           description: The person it makes (since 1.8.0); missing for `for_me`.
+        name:
+          type: string
+          description: The new user's name, when the admin gave one (since 1.12.0, ADR-083).
+        move:
+          type: boolean
+          description: A move invitation (since 1.12.0, ADR-083); missing otherwise.
 
     NewInvitation:
       allOf:
@@ -7229,6 +7428,9 @@ components:
           a day).
         - The owner (1.9.0, ADR-064): `access` `owner_changed` (the owner made the admin user `what`
           the home's owner instead of `from`).
+        - A device moved (1.12.0, ADR-083): `access` `moved` (the device `what`, which joined with a
+          move invitation, used its key for the first time, and the device `from` it moved from, of
+          the same user, was revoked; `who` is the new device).
         - `composer`: `project` (devices and rooms removed, added, renamed or moved, in `changes`),
           `setting` (a DirectorLink property changed in Composer: `what` is its name, `to` its value).
         - `system`: `backup`, `restore` (`from`: when the backup was made), `cloud_backup` (an
@@ -7239,7 +7441,8 @@ components:
           when it is back), `driver_updated` (`from`, `to`), `driver_started` (the controller or the
           driver restarted), `driver_added`, `remote_update_required` (1.8.0: the account service no
           longer takes this version of DirectorLink for remote access; `from` this version, `to` the
-          oldest it takes when it said; once until a connection opens again).
+          oldest it takes when it said; once until a connection opens again), `direct_https` (1.12.0,
+          ADR-082: the home's owner turned Direct HTTPS `to` `on` or `off`; `who` is their key).
       required: [id, at, kind, action, who]
       properties:
         id:
@@ -7254,7 +7457,7 @@ components:
           enum: [scene, schedule, door, composer, access, system]
         action:
           type: string
-          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required]
+          enum: [run, "off", pulse, hold, release, doorbell, left_open, asked, paired, created, role_changed, permissions_changed, room_hidden, room_shown, revoked, forgotten, expired, joined, all_revoked, link_created, link_replaced, link_removed, links_removed, ask_link_created, ask_link_replaced, ask_link_removed, pairing_code, users_merged, merge_suggested, owner_changed, moved, project, setting, backup, restore, cloud_backup, remote_away, driver_updated, driver_started, driver_added, remote_update_required, direct_https]
         who:
           $ref: "#/components/schemas/ActivityWho"
         what:

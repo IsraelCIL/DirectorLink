@@ -40,6 +40,7 @@ local suites = {
     "test_access",
     "test_people",
     "test_users",
+    "test_add_user",
     "test_owner",
     "test_security",
     "test_light_v1",
@@ -63,6 +64,7 @@ local suites = {
     "test_camera_drivers",
     "test_door_controllers",
     "test_doorbell_doors",
+    "test_https",
 }
 
 -- About how many seconds each suite takes (all of them in one run on a PC, 2026-10-03; CI takes
@@ -74,6 +76,7 @@ local SECONDS = {
     test_access = 1,
     test_people = 16,
     test_users = 20,
+    test_add_user = 8,
     test_owner = 10,
     test_http = 1,
     test_router = 1,
@@ -89,6 +92,7 @@ local SECONDS = {
     test_camera_drivers = 5,
     test_door_controllers = 13,
     test_doorbell_doors = 5,
+    test_https = 8,
     test_lock = 1,
     test_remote = 18,
     test_profiles = 3,

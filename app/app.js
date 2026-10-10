@@ -16,7 +16,8 @@ import { notificationSupport, notificationsOn, ringingDoorbells } from "./js/doo
 import { currentLanguage, setLanguage, t } from "./js/i18n.js";
 import { icon } from "./js/icons.js";
 import { startPwa } from "./js/pwa.js";
-import { joinView, storeInvitation } from "./js/views/join.js";
+import { joinView, joinedNotice, storeInvitation } from "./js/views/join.js";
+import { moveSignature } from "./js/views/move.js";
 import { deviceJoinSignature, deviceRequestNotice, watchDeviceRequests } from "./js/views/device-join.js";
 import { musicRouteChanged, musicSignature, startMusic } from "./js/music.js";
 import { accessView, resetAccess } from "./js/views/access.js";
@@ -287,9 +288,11 @@ function signature() {
     // The sign-ins the account server has set up (account.js), once asked.
     signInProviders(),
     providersStatus(),
-    // Remote access (remote.js): the connection in use, the controller's answer, and whether this
-    // device is linked (kept in localStorage, so it is read here).
+    // Remote access (remote.js): the connection in use (at home: the Direct HTTPS name or the
+    // address, 1.12.0), the controller's answer, and whether this device is linked (kept in
+    // localStorage, so it is read here).
     state.transport,
+    state.lanRoute,
     state.remoteInfo,
     savedRemote(),
     // Alerts on this device (js/alerts.js): on, possible, being switched, what it said.
@@ -324,6 +327,12 @@ function signature() {
     ui.joinBusy,
     ui.joinMessage,
     ui.joinWait,
+    // Joining in the Home Screen app, whom this device joined as, a name asked for, a move (1.12.0).
+    ui.joinHere,
+    ui.joinCopied,
+    ui.joined,
+    ui.nameCard ? { ...ui.nameCard, draft: undefined } : null,
+    moveSignature(),
     state.profile,
     ui.roomOrderMessage,
     state.scenes,
@@ -354,6 +363,8 @@ function signature() {
     route.name === "settings" ? ui.backup : 0,
     // Its automatic backups to the account (passwords in views/cloud-backup.js, not in `ui`).
     route.name === "settings" ? ui.autoBackup : 0,
+    // Direct connection at home (1.12.0, views/direct.js).
+    route.name === "settings" ? ui.directHttps : 0,
     // "Last update", on Settings → Controller only: the other pages are not redrawn by every poll.
     route.name === "settings" && route.page === "controller" ? state.lastUpdated?.getTime() : 0,
     route.name === "settings" ? [notificationSupport(), notificationsOn()] : 0,
@@ -477,6 +488,9 @@ function render(force = false) {
   // A new device of the account asks to join this home (ADR-053): under the header, on every screen.
   const request = deviceRequestNotice();
   if (request) content.splice(1, 0, request);
+  // "You joined <home> as <user>." (1.12.0), from the home's sealed answer, until dismissed.
+  const joined = route.name === "join" ? null : joinedNotice();
+  if (joined) content.splice(1, 0, joined);
   // What stays the same element (Home's command field) stays in the page.
   replaceKeeping(view, content);
   restoreUi(saved);

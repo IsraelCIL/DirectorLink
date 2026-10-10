@@ -1,7 +1,8 @@
 // First-time setup on Home: the controller address and the pairing code from Composer
 // (DirectorLink → Actions → New Pairing Code). A code lasts 15 minutes and works once. Below it,
 // signing in with Google (account.js), which will reach the home from anywhere (docs/ACCOUNTS.md);
-// signed in, joining from another device of the account (ADR-053); and Paste invitation link.
+// signed in, joining from another device of the account (ADR-053); and Join with an invitation
+// (Paste invitation link before 1.12.0).
 
 import { formatPairingCode, normalizeHost } from "../../api-client.js";
 import { IS_IOS } from "../platform.js";
@@ -11,6 +12,7 @@ import { icon } from "../icons.js";
 import { pairWithCode } from "../session.js";
 import { signInButtons } from "./common.js";
 import { joinFromAnotherDevice, pasteInvitationPanel } from "./device-join.js";
+import { movedNotice } from "./move.js";
 import { addressChanged, findController } from "./find.js";
 import { notify, state, ui } from "../state.js";
 
@@ -132,6 +134,8 @@ function iosCard() {
       { class: "card connect-card", "aria-labelledby": "connect-title" },
       h("span", { class: "connect-icon" }, icon("key")),
       h("h2", { id: "connect-title", class: "connect-title" }, t("connect.title")),
+      // This Safari tab gave its place to the Home Screen app (1.12.0, views/move.js).
+      movedNotice(),
       h("p", { class: "notice notice-info", id: "connect-ios" }, t("connect.iosText")),
       h("p", { class: "connect-text" }, t("connect.iosHow")),
       accountOption({ divider: false }),

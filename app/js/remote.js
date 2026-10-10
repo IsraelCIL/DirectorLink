@@ -1,11 +1,13 @@
 // Sealed requests (docs/ACCOUNTS.md): API requests sealed with this device's lock key. Through the
 // account they go to api.directorlink.io, which passes them to the home without being able to read
-// them (away from home, and always on iPhone and iPad). On the home network they go to the
-// controller itself (POST /v1/sealed), so the API key never crosses the network after pairing.
-// The answer comes back sealed either way.
+// them (away from home, and on iPhone and iPad unless the controller has Direct HTTPS). On the home
+// network they go to the controller itself (POST /v1/sealed), at its address or, with Direct HTTPS
+// (1.12.0, direct.js), at its own name over HTTPS, so the API key never crosses the network after
+// pairing. The answer comes back sealed either way.
 
-import { ApiError, apiRequest } from "../api-client.js";
+import { ApiError } from "../api-client.js";
 import { ACCOUNTS_API } from "./account.js";
+import { homeNetworkRequest } from "./direct.js";
 import { deriveLock, fromBase64, invitationLock, open, seal } from "./lock.js";
 
 const REMOTE_KEY = "directorlink.remote"; // { home, keyId }: this device's home and key id
@@ -142,10 +144,11 @@ export class SealRefused extends Error {
   }
 }
 
-// `wanted`: as for apiRequest (api-client.js), asked before each send.
-function lanDelivery(host, timeoutMs, wanted) {
+// `address`: the controller's address, or its Direct HTTPS origin (direct.js). `wanted`: as for
+// apiRequest (api-client.js), asked before each send.
+function lanDelivery(address, timeoutMs, wanted) {
   return async (envelope) => {
-    const result = await apiRequest(host, "/v1/sealed", { method: "POST", body: { envelope }, timeoutMs, wanted });
+    const result = await homeNetworkRequest(address, "/v1/sealed", { method: "POST", body: { envelope }, timeoutMs, wanted });
     if (result.ok && result.data?.envelope) return result.data.envelope;
     throw new SealRefused(result.data?.code || `HTTP_${result.status}`, result.status, Number(result.data?.time));
   };
@@ -156,8 +159,8 @@ function lanDelivery(host, timeoutMs, wanted) {
 // Refusals and writes are never repeated.
 const READ_RETRY_DELAY_MS = 400;
 
-async function lanExchange(host, apiKey, target, path, options, timeoutMs) {
-  const deliver = lanDelivery(host, timeoutMs, options.wanted);
+async function lanExchange(address, apiKey, target, path, options, timeoutMs) {
+  const deliver = lanDelivery(address, timeoutMs, options.wanted);
   try {
     return await sealedExchange(apiKey, target, path, options, deliver);
   } catch (error) {
@@ -167,14 +170,15 @@ async function lanExchange(host, apiKey, target, path, options, timeoutMs) {
   }
 }
 
-// Like apiCall, sealed, on the home network.
-export async function lanCall(host, apiKey, target, path, options = {}) {
-  return answerData(await lanExchange(host, apiKey, target, path, options, options.timeoutMs || 8000));
+// Like apiCall, sealed, on the home network: at `address`, the controller's address or its Direct
+// HTTPS origin.
+export async function lanCall(address, apiKey, target, path, options = {}) {
+  return answerData(await lanExchange(address, apiKey, target, path, options, options.timeoutMs || 8000));
 }
 
 // A camera picture, sealed, on the home network.
-export async function lanImage(host, apiKey, target, path) {
-  return answerBlob(await lanExchange(host, apiKey, target, path, {}, 12000));
+export async function lanImage(address, apiKey, target, path) {
+  return answerBlob(await lanExchange(address, apiKey, target, path, {}, 12000));
 }
 
 // The home's refusal, from its sealed answer: `sealed` marks it as the home's own word (a 401 there

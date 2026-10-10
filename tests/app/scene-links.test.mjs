@@ -9,6 +9,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DIRECT_KEY, DIRECT_NAME, directRecord, sealedDoor } from "./sealed-door.mjs";
+
 // ---- just enough of a browser ------------------------------------------------------------------
 class FakeNode {}
 class FakeElement extends FakeNode {
@@ -88,7 +90,10 @@ function answer(status, body) {
   return new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { "Content-Type": status >= 400 ? "application/problem+json" : "application/json" } });
 }
 
-globalThis.fetch = async (url, init = {}) => {
+// The controller as it answers at its address (which an iPhone cannot use); the iPhone of these
+// tests is at home with Direct HTTPS (1.12.0): its requests go to the controller's name, sealed
+// (tests/app/sealed-door.mjs), and each is answered as here.
+const plainFetch = async (url, init = {}) => {
   const { hostname, pathname: path } = new URL(url);
   if (hostname !== HOST) throw new TypeError(`blocked: ${url}`);
   const method = init.method || "GET";
@@ -119,6 +124,16 @@ globalThis.fetch = async (url, init = {}) => {
   if (method === "GET") return answer(200, { items: [] });
   return answer(404, { status: 404, code: "NOT_FOUND", detail: `no ${method} ${path}` });
 };
+const door = sealedDoor({
+  apiKey: "ak_test",
+  keyId: "0a1b2c3d",
+  respond: (method, path, body) => plainFetch(`http://${HOST}:41999${path}`, { method, body: body === null || body === undefined ? undefined : JSON.stringify(body) }),
+});
+globalThis.fetch = async (url, init = {}) => {
+  const { hostname, pathname } = new URL(url);
+  if (hostname === DIRECT_NAME && pathname === "/v1/sealed") return door(init);
+  return plainFetch(url, init);
+};
 
 const { state, ui } = await import("../../app/js/state.js");
 const { setLanguage } = await import("../../app/js/i18n.js");
@@ -129,8 +144,13 @@ const { outcomeText } = await import("../../app/js/views/history.js");
 const { default: en } = await import("../../app/i18n/en.js");
 const { default: he } = await import("../../app/i18n/he.js");
 
+// Lets fetch answers, promise chains and WebCrypto settle: every request is sealed, and each of its
+// steps waits for the thread pool (a digest waits there too).
 async function settle() {
-  for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  for (let index = 0; index < 40; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await crypto.subtle.digest("SHA-256", new Uint8Array(1));
+  }
 }
 
 function walk(nodes, visit) {
@@ -172,6 +192,9 @@ async function connect({ role = "admin", old = false, items = [], remoteAccess =
   confirmed.length = 0;
   confirmAnswer = true;
   clipboard.length = 0;
+  // At home with Direct HTTPS, as the controller's GET /v1/system said; this device seals there.
+  stored.set(DIRECT_KEY, directRecord());
+  stored.set("directorlink.seal", JSON.stringify({ host: HOST, keyId: "0a1b2c3d", seals: true }));
   views.leaveSceneLink();
   ui.sceneLinks = null;
   Object.assign(state, {
@@ -179,6 +202,7 @@ async function connect({ role = "admin", old = false, items = [], remoteAccess =
     apiKey: "ak_test",
     status: "connected",
     transport: "lan",
+    lanRoute: "https",
     loaded: true,
     online: true,
     role,

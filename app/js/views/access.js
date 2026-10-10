@@ -15,6 +15,12 @@
 // pair a device at home; a member sees only their own user and removes their other devices. A user
 // has at most five devices: a sixth is refused with the list (views/device-limit.js). The owner can
 // make another admin the owner (ADR-064).
+//
+// Since 1.12.0 (ADR-083, `features.user_names`): admins add a user in two steps, a name and their
+// access, then how they connect: Send a link (the email of their Google or Apple account; anywhere;
+// 7 days; once), or a pairing code (at home, no account). The new user gets that name and access
+// when the link is accepted; the name stays on the controller. Every user renames their own
+// devices and names themself (admins any); a device not used for 30 days says so next to Remove.
 
 import { h } from "../dom.js";
 import { formatDateTime, formatRelative, formatTime, formatUntil, t } from "../i18n.js";
@@ -26,7 +32,7 @@ import { api, errorText, roleLabel } from "../session.js";
 import { can, notify, state, ui } from "../state.js";
 import { loadScenes } from "../scenes.js";
 import { notReadyState, offlineBanner, pageHeader } from "./common.js";
-import { deviceLimitOf, deviceLimitPanel } from "./device-limit.js";
+import { deviceLimitOf, deviceLimitPanel, lastUsed, staleDevice } from "./device-limit.js";
 import { makeInvitation } from "./device-join.js";
 import { accessBody, accessSummary, copyAccess, newMemberAccess, peopleSupported, permissionsEditor } from "./permissions.js";
 
@@ -43,6 +49,11 @@ function failure(error) {
 // The controller has users (1.9.0, ADR-061): GET /v1/users, members adding their own devices.
 export function usersSupported() {
   return state.system?.features?.users === true;
+}
+
+// The controller names new users, and lets every user name themself and their devices (1.12.0).
+export function namesSupported() {
+  return state.system?.features?.user_names === true;
 }
 
 // Every device of the users listed, with the user it belongs to (for an invitation's maker).
@@ -308,7 +319,24 @@ function movePerson(device, profile, select) {
 function renamePerson(profile) {
   const name = window.prompt(t("access.renamePrompt"), profile.name);
   if (!name || !name.trim() || name.trim() === profile.name) return;
-  act(() => api(`/v1/profiles/${profile.id}`, { method: "PATCH", body: { name: name.trim().slice(0, 64) } }), t("access.renamed", { name: name.trim() }));
+  const value = name.trim().slice(0, 64);
+  // One's own user (1.12.0): any user names themself; admins rename anyone.
+  const own = profile.you === true && namesSupported();
+  act(async () => {
+    const answer = own
+      ? await api("/v1/profile", { method: "PATCH", body: { name: value } })
+      : await api(`/v1/profiles/${profile.id}`, { method: "PATCH", body: { name: value } });
+    if (profile.you && state.profile) state.profile = own && answer && typeof answer === "object" ? { ...state.profile, ...answer, prefs: state.profile.prefs } : { ...state.profile, name: value };
+  }, t("access.renamed", { name: value }));
+}
+
+// A device renamed by its user, or an admin (1.12.0 for a member; admins could before).
+function renameDevice(device) {
+  if (ui.access.busy) return;
+  const name = window.prompt(t("users.device.renamePrompt"), device.name);
+  if (!name || !name.trim() || name.trim() === device.name) return;
+  const value = name.trim().slice(0, 64);
+  act(() => api(`/v1/api-keys/${device.id}`, { method: "PATCH", body: { name: value } }), t("users.device.renamed", { name: value }));
 }
 
 function revokeInvitation(invitation) {
@@ -422,10 +450,6 @@ function problemNote(value) {
   return value && !Array.isArray(value) && value.error ? h("p", { class: "notice notice-error", role: "status" }, value.error) : null;
 }
 
-function lastUsed(device) {
-  return device.last_used_at ? t("access.lastUsed", { time: formatRelative(device.last_used_at) }) : t("access.neverUsed");
-}
-
 // A key that expires (ADR-040: the API console's lasts a day).
 export function expiry(device, now = Date.now()) {
   if (!device.expires_at) return null;
@@ -533,7 +557,8 @@ function invitationRow(invitation, devices) {
     h(
       "div",
       { class: "access-main" },
-      h("span", { class: "access-name" }, role),
+      // The new user's name (1.12.0), when the admin gave one.
+      h("span", { class: "access-name", dir: "auto" }, invitation.name ? `${invitation.name} · ${role}` : role),
       h("span", { class: "access-sub", dir: "auto" }, [t("access.expires", { time: formatDateTime(new Date(invitation.expires_at)) }), maker ? t("access.madeBy", { name: maker }) : null].filter(Boolean).join(" · "))
     ),
     h(
@@ -570,7 +595,7 @@ function makePairingCode(body, forName) {
   if (ui.access.busy) return;
   act(async () => {
     const code = await api("/v1/pairing-code", { method: "POST", body });
-    ui.access = { ...ui.access, pairing: { ...code, forName, at: Date.now() }, newUser: null };
+    ui.access = { ...ui.access, pairing: { ...code, forName, at: Date.now() }, adding: null };
   }, null);
 }
 
@@ -602,39 +627,150 @@ function pairingPanel() {
   );
 }
 
-// A new user, paired at home: a name and what they may do, then a code.
-function newUserPanel() {
-  const draft = ui.access.newUser;
+// Add a user (1.12.0, ADR-083): first a name and their access; then how they connect, a link to the
+// email of their Google or Apple account, or a pairing code at home. Both make a user of that name.
+function openAddUser() {
+  ui.access = { ...ui.access, adding: { step: 1, name: "", email: "", access: newMemberAccess() }, added: null, message: null };
+  if (state.scenes === null) loadScenes();
+  notify();
+}
+
+function closeAddUser() {
+  ui.access = { ...ui.access, adding: null };
+  notify();
+}
+
+function addUserNext(event) {
+  event?.preventDefault?.();
+  const draft = ui.access.adding;
+  const name = (draft.name || "").trim();
+  if (!name) {
+    ui.access = { ...ui.access, message: { kind: "error", text: t("users.add.nameNeeded") } };
+    notify();
+    return;
+  }
+  ui.access = { ...ui.access, adding: { ...draft, name: name.slice(0, 64), step: 2 }, message: null };
+  notify();
+}
+
+// Send a link: an invitation for a new user of that name and access, for their account's email.
+function addUserLink(event) {
+  event?.preventDefault?.();
+  const draft = ui.access.adding;
+  const email = (draft.email || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    ui.access = { ...ui.access, message: { kind: "error", text: t("settings.account.home.badEmail") } };
+    notify();
+    return;
+  }
+  const role = draft.access.role === "admin" ? "admin" : "member";
+  const named = namesSupported();
+  act(async () => {
+    const invitation = await makeInvitation({ forSelf: false, email, role, access: role === "member" ? accessBody(draft.access) : undefined, name: named ? draft.name : undefined });
+    ui.access = { ...ui.access, adding: null, added: { name: draft.name, email, named, link: invitationLink(invitation.home_id, invitation), expiresAt: invitation.expires_at } };
+  }, null);
+}
+
+// Pairing code: as New user at home was (1.9.0), with the name and access of step 1.
+function addUserCode() {
+  const draft = ui.access.adding;
+  makePairingCode({ name: draft.name, ...accessBody(draft.access) }, draft.name);
+}
+
+function addUserPanel() {
+  const draft = ui.access.adding;
   if (!draft) return null;
-  const input = h("input", { id: "users-new-name", type: "text", maxlength: "64", value: draft.name || "", autocomplete: "off", dir: "auto", dataset: { key: "users-new-name" } });
-  input.addEventListener("input", () => {
-    draft.name = input.value;
+  const busy = Boolean(ui.access.busy);
+  const cancel = h("button", { type: "button", class: "button button-quiet", dataset: { key: "users-add-cancel" }, onclick: closeAddUser }, t("common.cancel"));
+  if (draft.step !== 2) {
+    const input = h("input", { id: "users-add-name", type: "text", maxlength: "64", value: draft.name || "", autocomplete: "off", dir: "auto", required: true, dataset: { key: "users-add-name" } });
+    input.addEventListener("input", () => {
+      draft.name = input.value;
+    });
+    return h(
+      "form",
+      { class: "card settings-card invite-form add-user", novalidate: true, dataset: { key: "users-add" }, onsubmit: addUserNext },
+      h("h2", { class: "settings-title" }, icon("plus"), t("users.add.title")),
+      h("label", { class: "field-label", for: "users-add-name" }, t("users.add.name")),
+      input,
+      h("div", { class: "perm-editor" }, permissionsEditor(draft.access, { prefix: "users-add", changed: notify })),
+      h(
+        "div",
+        { class: "button-row" },
+        h("button", { type: "submit", class: "button button-primary", disabled: busy, dataset: { key: "users-add-next" } }, t("users.add.next")),
+        cancel
+      )
+    );
+  }
+  const linked = Boolean(ui.access.home);
+  const email = h("input", { id: "users-add-email", type: "email", autocomplete: "off", dir: "ltr", placeholder: "name@example.com", value: draft.email || "", dataset: { key: "users-add-email" } });
+  email.addEventListener("input", () => {
+    draft.email = email.value;
   });
-  const make = (event) => {
-    event?.preventDefault?.();
-    const name = (draft.name || "").trim();
-    if (!name) {
-      ui.access = { ...ui.access, message: { kind: "error", text: t("users.newUser.nameNeeded") } };
-      notify();
-      return;
-    }
-    const body = { name: name.slice(0, 64), ...accessBody(draft.access) };
-    makePairingCode(body, name);
-  };
   return h(
-    "form",
-    { class: "card settings-card invite-form", novalidate: true, dataset: { key: "users-new" }, onsubmit: make },
-    h("h2", { class: "settings-title" }, icon("plus"), t("users.newUser.title")),
-    h("label", { class: "field-label", for: "users-new-name" }, t("users.newUser.name")),
-    input,
-    h("div", { class: "perm-editor" }, permissionsEditor(draft.access, { prefix: "users-new", changed: notify })),
-    h("p", { class: "field-help" }, t("users.newUser.help")),
+    "div",
+    { class: "card settings-card invite-form add-user", dataset: { key: "users-add" } },
+    h("h2", { class: "settings-title", dir: "auto" }, icon("plus"), t("users.add.how", { name: draft.name })),
+    h("p", { class: "field-help", dataset: { key: "users-add-summary" } }, draft.access.role === "admin" ? roleLabel("admin") : `${roleLabel("member")} · ${accessSummary(draft.access)}`),
+    h(
+      "form",
+      { class: "add-user-choice", novalidate: true, dataset: { key: "users-add-link-form" }, onsubmit: addUserLink },
+      h("h3", { class: "settings-subtitle" }, t("users.add.link")),
+      h("p", { class: "field-help" }, t("users.add.linkHelp")),
+      linked
+        ? [
+            h("label", { class: "field-label", for: "users-add-email" }, t("settings.account.home.email")),
+            email,
+            h("div", { class: "button-row" }, h("button", { type: "submit", class: "button button-primary", disabled: busy, dataset: { key: "users-add-link" } }, t("users.add.createLink"))),
+          ]
+        : h("p", { class: "notice notice-info", dataset: { key: "users-add-unlinked" } }, t("users.add.linkNeedsAccount"))
+    ),
+    h(
+      "div",
+      { class: "add-user-choice" },
+      h("h3", { class: "settings-subtitle" }, t("users.add.code")),
+      h("p", { class: "field-help" }, t("users.add.codeHelp")),
+      h("div", { class: "button-row" }, h("button", { type: "button", class: "button button-secondary", disabled: busy, dataset: { key: "users-add-code" }, onclick: addUserCode }, t("users.add.makeCode")))
+    ),
     h(
       "div",
       { class: "button-row" },
-      h("button", { type: "submit", class: "button button-primary", disabled: Boolean(ui.access.busy), dataset: { key: "users-new-code" } }, t("users.newUser.code")),
-      h("button", { type: "button", class: "button button-quiet", onclick: () => { ui.access = { ...ui.access, newUser: null }; notify(); } }, t("common.cancel"))
+      h("button", { type: "button", class: "button button-quiet", dataset: { key: "users-add-back" }, onclick: () => { ui.access = { ...ui.access, adding: { ...draft, step: 1 } }; notify(); } }, t("users.add.back")),
+      cancel
     )
+  );
+}
+
+// The link made by Send a link, to share with them.
+function addedPanel() {
+  const added = ui.access.added;
+  if (!added) return null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(added.link);
+      ui.access = { ...ui.access, message: { kind: "success", text: t("settings.account.home.copied") } };
+    } catch {
+      ui.access = { ...ui.access, message: { kind: "error", text: t("settings.account.home.copyFailed") } };
+    }
+    notify();
+  };
+  return h(
+    "div",
+    { class: "card settings-card invitation", dataset: { key: "users-added" } },
+    h("h2", { class: "settings-title", dir: "auto" }, icon("plus"), t("users.add.linkFor", { name: added.name })),
+    h("p", { dir: "auto" }, added.named ? t("users.add.sent", { email: added.email, name: added.name }) : t("users.add.sentUnnamed", { email: added.email, name: added.name })),
+    qrCanvas(added.link, { label: t("settings.account.home.qrLabel") }),
+    h("input", { class: "invitation-link", type: "text", readonly: true, dir: "ltr", value: added.link, "aria-label": t("settings.account.home.linkLabel"), onfocus: (event) => event.target.select() }),
+    h(
+      "div",
+      { class: "button-row" },
+      h("button", { type: "button", class: "button button-primary", dataset: { key: "users-added-copy" }, onclick: copy }, t("settings.account.home.copy")),
+      navigator.share
+        ? h("button", { type: "button", class: "button button-secondary", onclick: () => navigator.share({ title: "DirectorLink", url: added.link }).catch(() => {}) }, t("settings.account.home.share"))
+        : null,
+      h("button", { type: "button", class: "button button-quiet", dataset: { key: "users-added-done" }, onclick: () => { ui.access = { ...ui.access, added: null, message: null }; notify(); } }, t("common.done"))
+    ),
+    h("p", { class: "field-help" }, t("settings.account.home.expires", { time: formatDateTime(new Date(added.expiresAt)) }))
   );
 }
 
@@ -700,10 +836,12 @@ function accountLine(user, list) {
   return t("users.account.some", { count: user.accounts });
 }
 
-// A device, under its user: when it was last used, and Remove where the controller says the
-// caller may; for admins, the user it belongs to (moving it gives it that user's access).
+// A device, under its user: when it was last used (30 days or more: "Not used since …", 1.12.0),
+// Rename (its user, and admins), and Remove where the controller says the caller may; for admins,
+// the user it belongs to (moving it gives it that user's access).
 function userDeviceRow(device, user, users) {
   const busy = Boolean(ui.access.busy);
+  const renamable = can("admin") || namesSupported();
   let picker = null;
   if (can("admin") && users.length > 1 && !user.access?.owner) {
     const select = h(
@@ -724,18 +862,27 @@ function userDeviceRow(device, user, users) {
       "div",
       { class: "access-main" },
       h("span", { class: "access-name", dir: "auto" }, device.name, device.current ? h("span", { class: "access-badge" }, t("access.thisDevice")) : null),
-      h("span", { class: "access-sub", dir: "auto" }, [lastUsed(device), expiry(device), device.accounts > 1 ? t("users.account.shared", { count: device.accounts }) : null].filter(Boolean).join(" · ")),
+      h("span", { class: `access-sub${staleDevice(device) ? " access-stale" : ""}`, dir: "auto", dataset: { key: `access-used-${device.id}` } }, [lastUsed(device), expiry(device), device.accounts > 1 ? t("users.account.shared", { count: device.accounts }) : null].filter(Boolean).join(" · ")),
       picker
     ),
-    device.removable
+    device.removable || renamable
       ? h(
           "div",
           { class: "access-actions" },
-          h(
-            "button",
-            { type: "button", class: "button button-small button-danger", disabled: busy, "aria-label": t("users.removeDeviceFor", { name: device.name }), dataset: { key: `access-revoke-${device.id}` }, onclick: () => removeDevice(device, user) },
-            t("users.removeDevice")
-          )
+          renamable
+            ? h(
+                "button",
+                { type: "button", class: "button button-small button-quiet", disabled: busy, "aria-label": t("users.device.renameFor", { name: device.name }), dataset: { key: `access-rename-device-${device.id}` }, onclick: () => renameDevice(device) },
+                t("access.rename")
+              )
+            : null,
+          device.removable
+            ? h(
+                "button",
+                { type: "button", class: "button button-small button-danger", disabled: busy, "aria-label": t("users.removeDeviceFor", { name: device.name }), dataset: { key: `access-revoke-${device.id}` }, onclick: () => removeDevice(device, user) },
+                t("users.removeDevice")
+              )
+            : null
         )
       : null
   );
@@ -784,7 +931,9 @@ function userRow(user, list) {
             )
           : null,
       ]
-    : [];
+    : user.you && namesSupported()
+      ? [h("button", { type: "button", class: "button button-small button-quiet", "aria-label": t("access.renameFor", { name: user.name }), dataset: { key: `access-rename-profile-${user.id}` }, onclick: () => renamePerson(user) }, t("access.rename"))]
+      : [];
   const users = Array.isArray(list.items) ? list.items : [];
   return h(
     "li",
@@ -1020,13 +1169,14 @@ function usersView(header) {
       access.message ? h("p", { class: `notice notice-${access.message.kind}`, role: access.message.kind === "error" ? "alert" : "status" }, access.message.text) : null,
       deviceLimitPanel(access.limit, { remove: removeFromLimit, busy: Boolean(access.busy), key: "users-limit", dismiss: () => { ui.access = { ...ui.access, limit: null }; notify(); } }),
       pairingPanel(),
+      addedPanel(),
       requests.length
         ? section("requests", t("access.requests"), t("access.requestsHelp"), h("ul", { class: "access-list" }, requests.map((request) => requestRow(request, invitations, devices))))
         : problemNote(access.requests),
       suggestions.length
         ? section("suggestions", t("users.suggestion.section"), t("users.suggestion.sectionHelp"), h("ul", { class: "access-list" }, suggestions.map((suggestion) => suggestionRow(suggestion, list))))
         : null,
-      admin ? newUserPanel() : null,
+      admin ? addUserPanel() : null,
       section(
         "persons",
         admin ? t("users.section") : t("users.sectionMine"),
@@ -1036,11 +1186,11 @@ function usersView(header) {
             "div",
             {},
             h("ul", { class: "access-list" }, (list?.items || []).map((user) => userRow(user, list))),
-            admin && !access.newUser
+            admin && !access.adding
               ? h(
                   "div",
                   { class: "button-row" },
-                  h("button", { type: "button", class: "button button-secondary", dataset: { key: "users-new-open" }, disabled: Boolean(access.busy), onclick: () => { ui.access = { ...ui.access, newUser: { name: "", access: newMemberAccess() } }; if (state.scenes === null) loadScenes(); notify(); } }, icon("plus"), t("users.newUser.open"))
+                  h("button", { type: "button", class: "button button-primary", dataset: { key: "users-add-open" }, disabled: Boolean(access.busy), onclick: openAddUser }, icon("plus"), t("users.add.open"))
                 )
               : null,
             admin ? null : h("p", { class: "field-help" }, t("users.addOwnHelp"))

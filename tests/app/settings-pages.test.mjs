@@ -534,7 +534,9 @@ test("Settings → Controller: the controller, then Updates, then Backup for adm
     walk(card, (node) => node.tagName === "DT" && list.push(node.textContent));
     return list;
   };
-  assert.deepEqual(labels(page[2].children[0]), ["Status", "Access", "Last update"]);
+  // Which way this device reaches its home (1.12.0): here the home network, at its address.
+  assert.deepEqual(labels(page[2].children[0]), ["Status", "This device", "Access", "Last update"]);
+  assert.match(textOf(page[2].children[0]), /This deviceOn the home network(?!,)/);
   assert.deepEqual(labels(page[2].children[2]), ["App version", "DirectorLink version", "Updates"]);
   assert.match(textOf(page[2].children[2]), new RegExp(`App version${APP_VERSION.replace(/\./g, "\\.")}`));
   // People and devices has its own row now.

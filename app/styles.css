@@ -3379,6 +3379,51 @@ input[type="text"].command-input:focus-visible {
   padding: 8px 10px;
 }
 
+/* Adding users and their devices (1.12.0, ADR-083): Add a user's two ways, the Home Screen app's
+   steps (join page, Move to the Home Screen app), the name card, a device not used for a while. */
+.add-user-choice,
+.move-home-screen,
+.join-home-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.add-user-choice {
+  padding-block-start: 12px;
+  border-block-start: 1px solid var(--line);
+}
+
+.move-home-screen {
+  margin-block-start: 6px;
+  padding-block-start: 14px;
+  border-block-start: 1px solid var(--line);
+}
+
+.home-screen-steps {
+  margin: 0;
+  padding-inline-start: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9375rem;
+}
+
+.name-card {
+  border: 2px solid var(--primary);
+}
+
+.joined-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.access-stale {
+  color: var(--errText);
+}
+
 .connect-signed-in {
   display: flex;
   align-items: center;

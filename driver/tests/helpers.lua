@@ -82,9 +82,16 @@ function T.http(mock, method, path, options)
     end
     local raw = table.concat(lines, "\r\n") .. "\r\n\r\n" .. (body or "")
 
+    -- options.tls: the request comes on the Direct HTTPS server (ADR-082), with its identifier as
+    -- Director passes it (OS 3.3.1 and newer); "port" announces the connection on port 28443 and
+    -- passes no identifier (as before OS 3.3.1).
+    if options.tls == "port" then
+        OnServerConnectionStatusChanged(handle, 28443, "ONLINE", options.ip or "192.168.1.50")
+    end
+    local identifier = options.tls == true and "https" or nil
     local size = options.chunkSize or #raw
     for index = 1, #raw, size do
-        OnServerDataIn(handle, raw:sub(index, index + size - 1), options.ip or "192.168.1.50", "50123")
+        OnServerDataIn(handle, raw:sub(index, index + size - 1), options.ip or "192.168.1.50", "50123", identifier)
     end
 
     return T.response(mock, handle)

@@ -23,14 +23,19 @@ away from home, and from the app on the home network too (1.0.0). The cloud neve
 - A profile is a user (until 1.9.0 the docs said a person). **Every API key belongs to one profile**
   (`profile_id` on the key): the key is one of that user's devices.
 - Composer's pairing code, an admin creating a key, and an invitation for someone else each make a
-  new profile, named after the key (a key created with `profile_id` joins that user instead, 1.8.0).
+  new profile, named after the key (a key created with `profile_id` joins that user instead, 1.8.0);
+  since 1.12.0 (ADR-083) an invitation from Add a user, like a pairing code made for a new user,
+  names the profile as the admin chose.
   **Add my other device** (an invitation with `for_me`) puts the new key in the inviter's profile,
   so a user's phone starts with their language, theme and favorites. Since 1.9.0 a pairing code an
   admin makes in the app is for a user they choose, or a new one (*Users and their devices*).
 - An admin can move a key to another profile (`PATCH /v1/api-keys/{id}` `profile_id`, or Settings →
   Users → User) — for two devices of one user that were paired separately; since 1.8.0 the key then
-  has that user's permissions — and rename a profile (`PATCH /v1/profiles/{id}`). A profile goes
-  with its last key.
+  has that user's permissions — and rename a profile (`PATCH /v1/profiles/{id}`). Since 1.12.0 every
+  user names their own profile (`PATCH /v1/profile` `name`) and renames their own devices
+  (`PATCH /v1/api-keys/{id}` `name`); `GET /v1/profile` says `name_from_device` while the name is
+  still one of their devices', and the app then asks once for their name. A profile goes with its
+  last key.
 - Keys from before 0.12.0 get a profile each at the first start; an admin can then merge them.
 - `GET /v1/profile` / `PATCH /v1/profile` are the caller's own (any role): `prefs` with `language`
   (`auto` or a tag), `theme` (`auto`, `light`, `dark`), `palette`, `favorites` (`"kind:id"`, in
@@ -126,8 +131,9 @@ own devices (`GET /v1/users`).
   History. A device used by several accounts (a shared tablet) stays where it is.
 - **A user goes with their last device**, with their name, permissions and preferences, and so do
   the invitations and the pairing code made for them.
-- **Pairing at home is for a chosen user.** An admin taps **Pair a device** on a user (or **New user
-  at home**, with a name and access): the app shows a pairing code (8 digits, 15 minutes, works
+- **Pairing at home is for a chosen user.** An admin taps **Pair a device** on a user (or **Add a
+  user**, with a name and access, then Pairing code; New user at home before 1.12.0, which added
+  Send a link there too, ADR-083): the app shows a pairing code (8 digits, 15 minutes, works
   once, also shown in Composer). The device that pairs with it joins that user, with their access;
   the device never chooses. Composer's New Pairing Code still makes a new admin user.
 - **Members add and remove their own devices:** Remove on their other devices, Add my other device in

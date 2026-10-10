@@ -2,6 +2,33 @@
 
 ## Current release
 
+`v1.12.0` — Pairing codes on 32-bit controllers (1120c), adding users and their devices (1120b), Direct HTTPS at home (1120a). A Worker change with a D1 migration (`0011_https_names`) and two secrets (`DLHOME_DNS_TOKEN`, `ACME_ACCOUNT_KEY`).
+
+## 1120c. Pairing codes (1.12.0)
+
+1. Composer → New Pairing Code three times: three different codes (on the owner's 64-bit CORE-1 they always differed; the fix matters on 32-bit controllers).
+
+## 1120b. Adding users and their devices (1.12.0)
+
+1. **Names.** On the iPad's Home Screen app, Settings asks "What's your name?" once ("Safari on iPad"); save it and Settings → Users shows it. The owner ("Chrome on Windows") is asked once on the PC.
+2. **Add a user by link.** iPhone: Settings → Users → Add a user, "Test", Member with a door, Next, Send a link to a spare Google or Apple account. Open it in Safari on the iPad: the Home Screen app is recommended. Copy link, open the Home Screen app, sign in, Join with an invitation, Paste: "You joined <home> as Test.", the user "Test" with the device "DirectorLink app on iPad". The controller log's `invitation` message to the relay doesn't contain "Test".
+3. **Add a user by pairing code** on the PC: Add a user → Pairing code; an Android phone pairs with it and joins that user.
+4. **Move.** On an iPad Safari tab with a key: Settings → Account → Move to the Home Screen app, Copy link, paste it in the Home Screen app. Safari says "Moved to the Home Screen app…"; the user has as many devices as before; History says the Safari device moved. Also with five devices.
+5. **Renames and old devices.** A member renames one of their own devices; Ort's Samsung shows "Not used since 30 Sept 2026" by Remove.
+
+## 1120a. Direct HTTPS at home (1.12.0)
+
+1. Deploy the Worker (migration, then the secrets), then update the driver. Composer still says Direct HTTPS = Allowed (from the test build); Status: "Allowed: the home's owner turns it on in the app". The test build's name and key are kept.
+2. Owner's iPhone: Settings → Controller → Direct connection at home: read the explanation, turn it on. "Getting a certificate…", then "On until <date>" (about 90 days) within about a minute. Worker logs: `https_certificate_requested`, `https_certificate_issued`, `https_dns_updated`; Cloudflare: the A record to 192.168.1.201, DNS only.
+3. iPhone and iPad on home Wi-Fi, Safari tab and Home Screen app: Settings → Controller → This device says "On the home network, direct (HTTPS)". Switch a KNX light, open the DoorBird picture, open the gate once; the controller's log shows the requests at home and none through the relay.
+4. iPhone on cellular: through DirectorLink's servers within about 2.5 s; back on Wi-Fi, direct again within a minute.
+5. Android members (Chrome): direct (HTTPS) after allowing Chrome's local network prompt; with it denied in site settings the phone still works through the servers.
+6. A non-owner admin sees the card read-only (and a `PUT` gets 403); a member sees no card. Composer back to Off: the card says the installer has to allow it.
+7. Owner turns it off: the A record goes (`https_dns_deleted`), iPhones go back to the servers, Android to the plain address.
+8. Load: several phones on camera pages over HTTPS; the controller stays responsive (each request is a new TLS connection).
+
+## Previous release
+
 `v1.11.0` — Smaller Worker logs (1110e), Control4's Sonos drivers (1110d), camera sounds by name (1110c), commands that do even more (1110b), open the gate from the ring (1110a). A Worker change (logs only); no D1 migration.
 
 ## 1110e. Smaller Worker logs (1.11.0)

@@ -146,6 +146,10 @@ function System.info(ctx)
         },
         -- "C" or "F" (1.10.2): what clients show temperatures in that no one thermostat says.
         temperature_scale = Units.projectScale(registry),
+        -- Direct HTTPS (1.12.0, ADR-082): { name, port, not_after } while the TLS server listens with
+        -- a certificate valid now, where the app reaches this API over HTTPS at home; else null. Always
+        -- there from 1.12.0 (the app shows Direct HTTPS only to a controller that says it).
+        direct_https = (services.https and services.https.published and services.https.published()) or Json.null,
         -- A member's: only what they see.
         inventory = inventory(ctx.apiKey, registry, counts),
         lifecycle = {
@@ -184,6 +188,10 @@ function System.info(ctx)
         -- climate scene step that turns each AC on as it was (mode "on") (1.10.0, ADR-070); always there.
         -- scene_levels_dimmers_only: a scene's level for a room or the whole home goes to dimmers
         -- only, and switches there stay as they are (ON_OFF_ONLY; ADR-077, 2026-10-09); always there.
+        -- user_names: an invitation names the new user (`name`), a user names themself and renames
+        -- their own devices (PATCH /v1/profile `name`, PATCH /v1/api-keys/{id} by a member), GET
+        -- /v1/profile says `name_from_device`, and a device moves to another of the same user (a
+        -- move invitation) (1.12.0, ADR-083); always there.
         features = {
             jewish_calendar = services.calendarEnabled ~= nil and services.calendarEnabled() == true,
             alarm_status = services.alarmStatusEnabled ~= nil and services.alarmStatusEnabled() == true,
@@ -200,6 +208,7 @@ function System.info(ctx)
             users = true,
             climate_last_mode = true,
             scene_levels_dimmers_only = true,
+            user_names = true,
         },
     }
 end

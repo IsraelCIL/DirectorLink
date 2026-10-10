@@ -1,11 +1,10 @@
 # Roadmap
 
-What is done is in the release notes: [`docs/releases/`](releases/), newest [v1.11.0](releases/v1.11.0.md). This page lists only what is still to come.
+What is done is in the release notes: [`docs/releases/`](releases/), newest [v1.12.0](releases/v1.12.0.md). This page lists only what is still to come.
 
 ## Next
 
 - **DirectorLink · UniFi Protect, its sounds as alerts:** its next version sends a camera's sounds as `Alert` with one label (DirectorLink 1.11 names them), and a report from a real UniFi system.
-- **The iPhone at home without DirectorLink's servers:** HTTPS on the controller with a certificate for the home's own address, if a Control4 driver can serve HTTPS (being checked).
 - **An assistant (opt-in).** An AI that understands any sentence and proposes the actions to confirm, with the home's own AI key, called from the phone so that DirectorLink's servers never see it; its own privacy note first, because names and requests would reach the AI's company.
 
 ## Later

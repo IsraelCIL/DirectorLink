@@ -30,7 +30,7 @@ DirectorLink.c4z inside Director  <-----------+
 Existing Control4 project devices
 ```
 
-At home, clients talk to DirectorLink directly: the app with sealed requests, scripts with an API key. Away, the app's requests go through api.directorlink.io (`cloud/`), sealed end to end, so the relay cannot read them (docs/ACCOUNTS.md, docs/RELAY.md). Remote access is optional and off by default.
+At home, clients talk to DirectorLink directly: the app with sealed requests, scripts with an API key. Away, the app's requests go through api.directorlink.io (`cloud/`), sealed end to end, so the relay cannot read them (docs/ACCOUNTS.md, docs/RELAY.md). Remote access is optional and off by default. With Direct HTTPS (1.12.0, ADR-082, off by default) the controller also serves the API over HTTPS on port 28443 under the home's own name (`<20 random letters and digits>.dlhome.cc`, whose public DNS record is its LAN address), so that iPhones and iPads, which cannot reach plain HTTP from the app's page, talk to it directly at home too; its certificate comes from Let's Encrypt through the relay (`src/api/direct_https.lua`, `cloud/src/https.js`).
 
 ## Repository
 

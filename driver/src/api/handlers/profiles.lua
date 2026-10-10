@@ -183,10 +183,19 @@ end
 -- The caller's own profile, with its favorites of devices removed in Composer (1.8.0, ADR-059): the
 -- app shows them as removed, with Remove, until the controller drops them (src/core/favorites_gone.lua);
 -- and what the caller may do (ADR-054), so that the app shows only that.
+-- Since 1.12.0 (ADR-083) also whether the user's name is still one of their devices' names (a user
+-- made by a device that joined or paired is named after it): the app then asks once for their name.
 local function ownView(ctx, profile)
     local result = view(profile)
     result.gone_favorites = FavoritesGone.list(result.prefs.favorites, ctx.apiKey)
     result.access = Access.describe(ctx.apiKey)
+    local fromDevice = false
+    for _, key in ipairs(ctx.services.keys.list()) do
+        if key.profile == profile.id and key.name == profile.name then
+            fromDevice = true
+        end
+    end
+    result.name_from_device = fromDevice
     return result
 end
 
@@ -200,29 +209,57 @@ end
 
 -- PATCH {"prefs": {"language": "he", "favorites": [...]}, "version": 3}: changes the named
 -- preferences (null clears one). With `version`, it applies only if nobody changed the profile
--- since that version was read (409 VERSION_CONFLICT).
+-- since that version was read (409 VERSION_CONFLICT). Since 1.12.0 (ADR-083) `name` renames the
+-- caller's own user, whoever they are (an admin renames anyone with PATCH /v1/profiles/{id}).
 function Profiles.update(ctx)
     local body = ctx.body
-    local problem = Validate.body(body, { prefs = true, version = true }, true)
+    local problem = Validate.body(body, { prefs = true, version = true, name = true }, true)
     if problem then
         return problem
     end
-    if body.prefs == nil then
+    if body.prefs == nil and body.name == nil then
         return Problem.invalidField("prefs", "prefs is required")
     end
     local version = body.version
     if version ~= nil and (type(version) ~= "number" or version ~= math.floor(version) or version < 0) then
         return Problem.invalidField("version", "version must be the profile's version, a whole number")
     end
+    local name = nil
+    if body.name ~= nil then
+        local nameProblem
+        name, nameProblem = Validate.name(body.name, "name")
+        if nameProblem then
+            return nameProblem
+        end
+    end
     local profile
     profile, problem = ownProfile(ctx)
     if not profile then
         return problem
     end
-    local changes
-    changes, problem = validatePrefs(body.prefs, ctx.services.profiles.MAX_FAVORITES)
-    if not changes then
-        return problem
+    local changes = nil
+    if body.prefs ~= nil then
+        changes, problem = validatePrefs(body.prefs, ctx.services.profiles.MAX_FAVORITES)
+        if not changes then
+            return problem
+        end
+    end
+    if name ~= nil then
+        if version ~= nil and version ~= profile.version then
+            return Problem.new(409, "VERSION_CONFLICT", "The profile changed on another device; read it again", { version = profile.version })
+        end
+        local renamed = name == profile.name and profile or ctx.services.profiles.rename(profile.id, name)
+        if not renamed then
+            return Problem.notFound("Profile", profile.id)
+        end
+        if renamed ~= profile then
+            ctx.services.log.info("auth", "a user named themself", { profile = profile.id, key_id = ctx.apiKey.id })
+        end
+        profile = renamed
+        if changes == nil then
+            return 200, ownView(ctx, profile)
+        end
+        version = nil
     end
     local updated, failure = ctx.services.profiles.updatePrefs(profile.id, changes, version)
     if not updated then

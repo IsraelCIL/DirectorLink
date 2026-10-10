@@ -5,6 +5,12 @@
 -- (1.9.0) is bound only to an account that already uses the member's device at this home: the
 -- account service registers it only for such an account (`for_key`), so a member never brings
 -- another account into the home. The app turns it into a link. The secret is in this answer only.
+--
+-- Since 1.12.0 (ADR-083): an admin's invitation for a new user names that user (`name`): whoever
+-- accepts it becomes a user of that name, kept here only (the account service is told the id, the
+-- email and the expiry, as before). And a device makes a move invitation for itself (`for_me` and
+-- `move`): the device that accepts it joins the same user and this key goes at its first use, so
+-- the user's devices stay as many (an iPhone's Safari tab moving to its Home Screen app).
 
 local Json = require("src.core.json")
 local Problem = require("src.api.problem")
@@ -33,9 +39,28 @@ Invitations.MEMBER_PENDING = 2
 -- existing user, such as their Google or Apple account for a user paired at home.
 function Invitations.create(ctx)
     local body = ctx.body or {}
-    local problem = Validate.body(body, { role = true, expires_in = true, for_me = true, email = true, access = true, profile_id = true })
+    local problem = Validate.body(body, { role = true, expires_in = true, for_me = true, email = true, access = true, profile_id = true, name = true, move = true })
     if problem then
         return problem
+    end
+    -- The new user's name (1.12.0): only for an invitation that makes a new user.
+    local userName = nil
+    if body.name ~= nil then
+        if body.for_me == true or body.profile_id ~= nil then
+            return Problem.invalidField("name", "name is the new user's: leave it out for your own device or an existing user's")
+        end
+        local nameProblem
+        userName, nameProblem = Validate.name(body.name, "name")
+        if nameProblem then
+            return nameProblem
+        end
+    end
+    if body.move ~= nil and type(body.move) ~= "boolean" then
+        return Problem.invalidField("move", "move must be true or false")
+    end
+    local move = body.move == true
+    if move and body.for_me ~= true then
+        return Problem.invalidField("move", "A move invitation is for your own device: send for_me too")
     end
     local admin = Access.isAdmin(ctx.apiKey)
     if body.for_me ~= true and not admin then
@@ -51,12 +76,13 @@ function Invitations.create(ctx)
     end
     local invitations = ctx.services.invitations
     local seconds = body.expires_in
-    local longest = admin and invitations.MAX_SECONDS or Invitations.MEMBER_SECONDS
+    -- A move invitation is short, an admin's too (10 minutes at most, and by default).
+    local longest = (admin and not move) and invitations.MAX_SECONDS or Invitations.MEMBER_SECONDS
     if seconds ~= nil and (type(seconds) ~= "number" or seconds ~= math.floor(seconds)
         or seconds < invitations.MIN_SECONDS or seconds > longest) then
         return Problem.invalidField("expires_in", "expires_in must be whole seconds from " .. invitations.MIN_SECONDS .. " to " .. longest)
     end
-    if not admin then
+    if not admin or move then
         seconds = seconds or Invitations.MEMBER_SECONDS
     end
     local remote = ctx.services.remote
@@ -128,10 +154,20 @@ function Invitations.create(ctx)
         role = People.legacyRole(person)
         person = People.view(person)
     end
-    -- Up to five devices a user (1.9.0, ADR-061): checked again when the invitation is used.
-    problem = UserHandlers.refuseWhenFull(ctx, profile)
+    -- Up to five devices a user (1.9.0, ADR-061): checked again when the invitation is used. A move
+    -- adds none: the key that made it goes.
+    problem = (not move) and UserHandlers.refuseWhenFull(ctx, profile) or nil
     if problem then
         return problem
+    end
+    -- One move at a time: a new one replaces the one this key made before.
+    if move then
+        for _, older in ipairs(invitations.movesBy(ctx.apiKey.id)) do
+            invitations.revoke(older.id)
+            if remote.tell then
+                remote.tell({ type = "invitation_cancel", invitation_id = older.id })
+            end
+        end
     end
     -- A member's user keeps at most MEMBER_PENDING waiting: the oldest goes for the new one.
     if not admin then
@@ -145,7 +181,7 @@ function Invitations.create(ctx)
             ctx.services.log.info("remote", "invitation replaced by a newer one of the same user", { invitation = oldest.id, key_id = ctx.apiKey.id })
         end
     end
-    local invitation, failure = invitations.create(role, seconds, ctx.apiKey.id, profile, person, body.profile_id ~= nil)
+    local invitation, failure = invitations.create(role, seconds, ctx.apiKey.id, profile, person, body.profile_id ~= nil, { user_name = userName, move = move })
     if not invitation then
         if failure == "INVITATION_LIMIT_REACHED" then
             return Problem.new(409, failure, "There are already " .. invitations.MAX_PENDING .. " pending invitations; revoke one first")

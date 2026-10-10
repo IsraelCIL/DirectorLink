@@ -14,7 +14,6 @@ What is done is in the release notes: [`docs/releases/`](releases/), newest [v1.
 - Releases signed on GitHub, the signature checked by the driver in plain Lua (the minimum OS stays 3.3.0).
 - Fans with other than four speeds, from the fan's own speed list.
 - Better diagnostics for devices DirectorLink does not support yet.
-- KNX percentage dimming ([#11](https://github.directorlink.io/issues/11)).
 
 ## Not planned
 

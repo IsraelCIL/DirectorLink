@@ -15,7 +15,7 @@
 import { h } from "../dom.js";
 import { formatDate, t } from "../i18n.js";
 import { icon } from "../icons.js";
-import { api, errorText, keyGeneration, readSystem, whenForgotten } from "../session.js";
+import { api, errorText, keyGeneration, keyInUse, readSystem, whenForgotten } from "../session.js";
 import { can, notify, state, ui } from "../state.js";
 
 // While the controller gets its certificate it is asked how it goes this often, this many times
@@ -51,9 +51,12 @@ function isOwner() {
 }
 
 export function loadDirect() {
+  // Nothing is asked while the key is being forgotten (Forget key, Pair again).
+  if (!keyInUse()) return Promise.resolve();
+  if (loading) return loading;
   const since = keyGeneration();
-  loading ??= (async () => {
-    section().loading = true;
+  section().loading = true;
+  const read = (async () => {
     try {
       const status = await api("/v1/https");
       if (since !== keyGeneration()) return;
@@ -63,14 +66,15 @@ export function loadDirect() {
       if (since !== keyGeneration()) return;
       Object.assign(section(), { failed: errorText(error), missing: error?.status === 404 || error?.status === 405, at: Date.now() });
     } finally {
-      loading = null;
+      if (loading === read) loading = null;
       if (since === keyGeneration()) {
         section().loading = false;
         notify();
       }
     }
   })();
-  return loading;
+  loading = read;
+  return read;
 }
 
 // Asks the controller until it has its certificate (or gave up), then reads GET /v1/system again:
@@ -83,6 +87,10 @@ function watch() {
   const next = () =>
     window.setTimeout(async () => {
       if (polling !== token) return;
+      if (!keyInUse()) {
+        polling = null;
+        return;
+      }
       times += 1;
       await loadDirect();
       if (polling !== token) return;
@@ -106,7 +114,7 @@ function changeError(error) {
 
 async function setEnabled(enabled) {
   const current = section();
-  if (current.busy) return;
+  if (current.busy || !keyInUse()) return;
   const since = keyGeneration();
   current.busy = true;
   current.message = null;

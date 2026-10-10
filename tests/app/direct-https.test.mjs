@@ -357,6 +357,40 @@ test("at home on the address, the name is looked for once a minute, and used whe
   assert.equal(state.transport, "lan");
 });
 
+test("after a minute with nothing better to look for, the look still works: a name that comes later is tried at once, and the address comes back after a drop", async () => {
+  // At home on the address, no name, for more than a minute: the minute's look has nothing to try.
+  await connected({ remembered: false, direct: null });
+  assert.equal(state.lanRoute, "http");
+  await advance(70000, 1000);
+  // The owner turns it on: GET /v1/system gives the name, and it is tried at once.
+  net.direct = { name: DIRECT_NAME, port: DIRECT_PORT, not_after: CERT_END };
+  net.calls = [];
+  await finish(session.readSystem());
+  assert.ok(await until(() => state.lanRoute === "https", 5000), "tried at once, not a minute later");
+  assert.ok(net.calls.includes("https look"));
+  session.stopPolling();
+
+  // Without Direct HTTPS, as before 1.12.0: a minute at home, the network drops, the account; back
+  // within a minute once the address answers again.
+  await connected({ remembered: false, direct: null });
+  await advance(70000, 1000);
+  net.http = "refused";
+  assert.ok(await until(() => state.transport === "remote", 30000));
+  net.http = "ok";
+  assert.ok(await until(() => state.transport === "lan", 70000), "the home network again");
+  assert.equal(state.lanRoute, "http");
+  session.stopPolling();
+});
+
+test("a sealed answer at the name makes the address strict too: the key never goes there in the clear", async () => {
+  await start();
+  localStorage.setItem("directorlink.seal", JSON.stringify({ host: HOST, keyId: KEY_ID, seals: false }));
+  await finish(session.connect());
+  session.stopPolling();
+  assert.equal(state.lanRoute, "https");
+  assert.deepEqual(JSON.parse(stored.get("directorlink.seal")), { host: HOST, keyId: KEY_ID, seals: true });
+});
+
 test("Forget key revokes the key the next way when the name gives no answer", async () => {
   await connected();
   net.https = "refused";
@@ -499,6 +533,22 @@ test("other admins see how it is, without the switch; members see nothing; nor d
   state.access = { role: "admin", owner: true };
   delete state.system.direct_https;
   assert.equal(directCard(), null, "a DirectorLink before 1.12.0");
+});
+
+test("Forget key while the card waits for the certificate: nothing more is asked but the revoke", async () => {
+  await card({ status: httpsStatus({ enabled: true, state: "requesting", certificate: null }) });
+  // The name takes the revoke and never answers: 4 s, then the address.
+  net.https = "swallowed";
+  net.sent = [];
+  await finish(session.revokeAndForget());
+  assert.deepEqual(
+    net.sent.map((call) => `${call.via} ${call.method} ${call.path}`),
+    ["https DELETE /v1/api-keys/current", "http DELETE /v1/api-keys/current"],
+    "the card's look at the certificate (every 3 s) is not sent while the key is being forgotten"
+  );
+  await advance(POLL_MS * 3);
+  assert.deepEqual(net.sent.length, 2, "nor after");
+  assert.equal(ui.directHttps, null);
 });
 
 test("the card's words in Hebrew, Spanish and Italian", () => {

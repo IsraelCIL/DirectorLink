@@ -1,11 +1,12 @@
 // A home for the Direct HTTPS tests (1.12.0): its controller at its name over HTTPS and at its
 // address, both sealed (tests/app/sealed-door.mjs), and the account service's relay. Each way can be
 // up ("ok"), refuse the connection ("refused": away from home, or Chrome's Local Network Access
-// refused), get no answer until the app gives up ("hang"), or lose the answer of a request that
-// arrived ("lost"). `net.calls` lists what reached the home and which way: "https look" and
-// "http look" (GET /v1/sealed), "https GET /v1/system", "http PATCH /v1/lights/1", "account GET
-// /v1/lights"; `net.sent` the same with their bodies; `net.urls` every URL fetched at home;
-// `net.gaveUp` how long the app waited for each request that got no answer ("hang"), in ms.
+// refused), get no answer until the app gives up ("hang"), lose the answer of a request that
+// arrived ("lost"), or take a sealed request and never answer it ("swallowed"). `net.calls` lists
+// what reached the home and which way: "https look" and "http look" (GET /v1/sealed), "https GET
+// /v1/system", "http PATCH /v1/lights/1", "account GET /v1/lights"; `net.sent` the same with their
+// bodies; `net.urls` every URL fetched at home; `net.gaveUp` how long the app waited for each
+// request that got no answer ("hang"), in ms.
 
 import { deriveLock, open, seal } from "../../app/js/lock.js";
 import { DIRECT_NAME, DIRECT_PORT, sealedDoor } from "./sealed-door.mjs";
@@ -114,9 +115,10 @@ export function fakeHome() {
     const mode = net[via];
     if (method === "GET") net.calls.push(`${via} look`);
     if (mode === "refused") throw new TypeError("Failed to fetch");
-    if (mode === "hang") return unanswered(init);
+    if (mode === "hang" || (mode === "swallowed" && method === "GET")) return unanswered(init);
     const reply = await doors[via](init);
     if (mode === "lost" && method === "POST") throw new TypeError("Failed to fetch");
+    if (mode === "swallowed" && method === "POST") return unanswered(init);
     return reply;
   }
 

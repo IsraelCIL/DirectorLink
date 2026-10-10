@@ -342,8 +342,16 @@ async function homeRequest(route, send, plain) {
     }
   }
   // It seals: from now on this device never sends its key to this controller in the clear.
-  if (route === "http" && generation === sealGeneration && !sealsHere()) rememberSeal(address, seal.keyId, true);
+  if (generation === sealGeneration && !sealsHere()) rememberSealing(route, address, seal.keyId);
   return answer;
+}
+
+// A sealed answer came the way `route`: the controller at this device's address seals. At the Direct
+// HTTPS name it is taken to be the same one, which only makes the address stricter (no key there in
+// the clear either).
+function rememberSealing(route, address, keyId) {
+  const host = route === "http" ? address : state.host;
+  if (host) rememberSeal(host, keyId, true);
 }
 
 function useTransport(transport) {
@@ -440,22 +448,25 @@ export async function checkInThroughAccount(force = false) {
 // request sealed with this device's key proves it: another network may have a device at the same
 // address, and nothing unsealed is trusted. The key is never sent to find out, and whatever
 // answers, it is kept. (With a driver before 1.0.0 the app stays with the account until it starts
-// again.)
+// again.) One look at a time, and none while the key is being forgotten.
 let lookingForHome = null;
 function tryHomeNetwork() {
-  if (!state.apiKey) return Promise.resolve();
-  lookingForHome ??= (async () => {
-    try {
-      const routes = homeRoutes();
-      const better = state.transport === "remote" ? (savedRemote() ? routes : []) : routes.slice(0, Math.max(0, routes.indexOf(state.lanRoute)));
-      for (const route of better) {
-        if (await homeAnswersAt(route)) return;
-      }
-    } finally {
-      lookingForHome = null;
+  if (!keyInUse()) return Promise.resolve();
+  if (lookingForHome) return lookingForHome;
+  const routes = homeRoutes();
+  const better = state.transport === "remote" ? (savedRemote() ? routes : []) : routes.slice(0, Math.max(0, routes.indexOf(state.lanRoute)));
+  if (!better.length) return Promise.resolve();
+  const look = (async () => {
+    for (const route of better) {
+      if (await homeAnswersAt(route)) return;
     }
   })();
-  return lookingForHome;
+  lookingForHome = look;
+  const done = () => {
+    if (lookingForHome === look) lookingForHome = null;
+  };
+  look.then(done, done);
+  return look;
 }
 
 // Whether this home's controller answers the way `route`, sealed; if it does, the app goes that way.
@@ -475,7 +486,7 @@ async function homeAnswersAt(route) {
     // A read without an answer is sent once more (remote.js), but not once the key is forgotten.
     await lanCall(address, state.apiKey, seal, "/v1/api-keys/current", { timeoutMs: DIRECT_PROBE_MS, wanted });
     if (generation !== sealGeneration || since !== forgets || connection() !== from) return false;
-    if (route === "http") rememberSeal(address, keyId, true);
+    rememberSealing(route, address, keyId);
     state.lanRoute = route;
     resetSeal();
     lanSeal = seal;
@@ -504,6 +515,7 @@ function noteDirect(system) {
 
 // GET /v1/system again (Settings → Controller → Direct connection at home, once it changed).
 export async function readSystem() {
+  if (!keyInUse()) return;
   const since = forgets;
   const system = await api("/v1/system");
   if (since !== forgets) return;
@@ -830,7 +842,6 @@ async function loadAll() {
     optionalList("/v1/refrigerators"),
   ]);
   state.system = system;
-  noteDirect(system);
   state.rooms = rooms?.items || [];
   state.lights = lights?.items || [];
   // Each in its own scale, °F or °C (1.10.2, temperature.js).
@@ -903,6 +914,8 @@ export async function connect() {
   try {
     await loadAll();
     if (run !== connectRun || since !== forgets) return false;
+    // Only now: a connect that the key's forgetting or another connect replaced remembers nothing.
+    noteDirect(state.system);
     state.status = "connected";
     state.notice = null;
     startPolling();

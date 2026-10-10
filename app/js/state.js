@@ -8,6 +8,9 @@ export const state = {
   status: "setup",
   // How requests travel: "lan" (the home network) or "remote" (sealed, through the account).
   transport: "lan",
+  // Which way on the home network (session.js): "https", the controller's Direct HTTPS name (1.12.0,
+  // direct.js), or "http", its address on port 41999.
+  lanRoute: "http",
   // GET /v1/remote from the controller, for Settings → Account (null until asked).
   remoteInfo: null,
   // This person's profile (profile.js): null until read, and with drivers before 0.12.0.

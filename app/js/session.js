@@ -1,15 +1,16 @@
 // Connection to the controller: first-time access, reconnecting with the saved key, loading
 // and refreshing device state. On the home network requests are sealed with this device's lock key
 // (POST /v1/sealed, remote.js), so the API key never crosses the network; with a driver from before
-// 1.0.0 they carry the key (api-client.js). Through the account they are sealed too (remote.js),
-// when the home network cannot be reached and on iPhone and iPad.
+// 1.0.0 they carry the key (api-client.js). With Direct HTTPS (1.12.0, direct.js) the home network
+// is first the controller's own name over HTTPS, on every device, iPhone and iPad included; then,
+// except on iPhone and iPad, its plain http:// address. Through the account they are sealed too
+// (remote.js), when the home network cannot be reached.
 
 import { loadAccount } from "./account.js";
 import {
   ApiError,
   apiCall,
   apiImage,
-  apiRequest,
   clearApiKey,
   normalizeHost,
   normalizePairingCode,
@@ -18,6 +19,7 @@ import {
   savedApiKey,
   savedHost,
 } from "../api-client.js";
+import { DIRECT_PROBE_MS, forgetDirect, homeNetworkRequest, rememberDirect, savedDirect } from "./direct.js";
 import { notificationsOn, notifyRings, trackRings } from "./doorbells.js";
 import { IS_IOS } from "./platform.js";
 import { RemoteError, SealRefused, forgetRemote, lanCall, lanImage, remoteCall, remoteImage, savedRemote } from "./remote.js";
@@ -76,9 +78,74 @@ export function keyGeneration() {
 let failedRefreshes = 0;
 let connectRun = 0;
 
-// This device can reach its home: over the home network, or through the account.
+// This device can reach its home: over the home network (its controller's Direct HTTPS name, or,
+// except on iPhone and iPad, its address), or through the account.
 export function reachable() {
-  return Boolean(state.apiKey && ((state.host && !IS_IOS) || savedRemote()));
+  return Boolean(state.apiKey && (homeRoutes().length > 0 || savedRemote()));
+}
+
+// ---- the ways to the home --------------------------------------------------------------------
+
+// The ways this device may reach its controller on the home network, best first: "https", its
+// Direct HTTPS name (remembered for this home, its certificate not expired; direct.js), on every
+// device; "http", its address on port 41999, except on iPhone and iPad (WebKit blocks it).
+// `state.lanRoute` is the one in use while `state.transport` is "lan".
+export function homeRoutes() {
+  const routes = [];
+  if (state.apiKey && directHere()) routes.push("https");
+  if (state.host && !IS_IOS) routes.push("http");
+  return routes;
+}
+
+function directHere() {
+  return savedDirect(savedRemote()?.home || null);
+}
+
+// Where a way's requests go: the HTTPS origin, or the controller's address; null when it is none.
+function addressOf(route) {
+  if (route === "https") return directHere()?.origin || null;
+  return route === "http" ? state.host || null : null;
+}
+
+// The way in use: the one chosen while it still is one, else the best there is (null: none).
+function currentRoute() {
+  const routes = homeRoutes();
+  if (!routes.length) return null;
+  if (!routes.includes(state.lanRoute)) useRoute(routes[0]);
+  return state.lanRoute;
+}
+
+function useRoute(route) {
+  if (state.lanRoute !== route) {
+    state.lanRoute = route;
+    // The new way looks at sealing for itself; requests that waited for the old look go the new way.
+    resetSeal();
+    notify();
+  }
+}
+
+// How this device reaches its home now, to tell whether it changed: "lan:https", "lan:http", "remote".
+function connection() {
+  return state.transport === "remote" ? "remote" : `lan:${state.lanRoute}`;
+}
+
+// A request the way `route` got no answer: the next way at home, else the account, when this device
+// has it. False when there is nowhere else to go (its error stands). Requests on their way the same
+// way move only once.
+function leaveRoute(route) {
+  if (state.transport !== "lan") return true;
+  const routes = homeRoutes();
+  if (route && routes.includes(state.lanRoute) && state.lanRoute !== route) return true;
+  const next = route ? routes[routes.indexOf(route) + 1] : null;
+  if (next) {
+    useRoute(next);
+    return true;
+  }
+  if (savedRemote() && state.apiKey) {
+    useTransport("remote");
+    return true;
+  }
+  return false;
 }
 
 // ---- sealing on the home network ------------------------------------------------------------
@@ -146,9 +213,11 @@ function resetSeal() {
   lanSealLook = null;
 }
 
-// A new key on this device (pairing, an invitation): what was known about the previous one goes.
+// A new key on this device (pairing, an invitation): what was known about the previous one goes,
+// and the Direct HTTPS name of its controller.
 export function forgetSealing() {
   forgetSeal();
+  forgetDirect();
   resetSeal();
   trustLinkedKeyId = true;
 }
@@ -167,12 +236,14 @@ function clockOffset(time) {
 
 // What sealing needs from this controller: its clock (GET /v1/sealed, without a key), and this
 // device's key id (saved at pairing or linking; for a device paired before 1.0.0, asked for once).
-async function setupLanSeal() {
+// At its Direct HTTPS name (a DirectorLink from 1.12.0, which always seals) the look is quick and
+// nothing ever goes unsealed: without a key id, not that way.
+async function setupLanSeal(route, address) {
   const generation = sealGeneration;
-  const host = state.host;
+  const direct = route === "https";
   const known = sealHere();
-  const seals = known?.seals === true;
-  const result = await apiRequest(host, "/v1/sealed", { timeoutMs: 8000 });
+  const seals = direct || known?.seals === true;
+  const result = await homeNetworkRequest(address, "/v1/sealed", direct ? { timeoutMs: DIRECT_PROBE_MS, retry: false } : { timeoutMs: 8000 });
   if (generation !== sealGeneration) return;
   if (!result.ok) {
     const code = result.data?.code;
@@ -185,12 +256,13 @@ async function setupLanSeal() {
   }
   let keyId = known?.keyId || (trustLinkedKeyId ? savedRemote()?.keyId : null) || null;
   if (!keyId && !seals) {
-    const key = await apiCall(host, "/v1/api-keys/current", { apiKey: state.apiKey });
+    const key = await apiCall(address, "/v1/api-keys/current", { apiKey: state.apiKey });
     if (generation !== sealGeneration) return;
     keyId = key?.id;
-    rememberSeal(host, keyId, false);
+    rememberSeal(address, keyId, false);
   }
   if (!keyId) {
+    if (direct) throw notReachable("SEALING_UNAVAILABLE");
     lanSeal = null;
     return;
   }
@@ -207,26 +279,34 @@ function refusal(error) {
   return notReachable(error.code);
 }
 
-// One request on the home network: sealed when the controller can open it, else with the key
-// (only for a device that never sealed with this controller).
-async function homeRequest(send, plain) {
+// A request that waited for the look at sealing while the key or the way changed: it was not sent,
+// so it goes again, the way in use now (api, image).
+class Rerouted extends Error {}
+
+// One request on the home network, the way `route`: sealed when the controller can open it, else
+// with the key (only at its address, and only for a device that never sealed with this controller).
+// `send(address, seal)`, `plain(address)`.
+async function homeRequest(route, send, plain) {
+  const address = addressOf(route);
+  if (!address) throw notReachable("UNREACHABLE");
   const generation = sealGeneration;
   if (lanSeal === undefined) {
-    lanSealLook ??= setupLanSeal().finally(() => {
+    lanSealLook ??= setupLanSeal(route, address).finally(() => {
       if (generation === sealGeneration) lanSealLook = null;
     });
     await lanSealLook;
-    // The key changed meanwhile (pairing, forgetting it): look again for the one in use now.
-    if (generation !== sealGeneration) return homeRequest(send, plain);
+    // The key changed meanwhile (pairing, forgetting it), or the way: look again, the way in use now.
+    if (generation !== sealGeneration) throw new Rerouted();
   }
   const seal = lanSeal;
+  const mustSeal = route === "https" || sealsHere();
   if (!seal) {
-    if (sealsHere()) throw notReachable("SEALING_UNAVAILABLE");
-    return plain();
+    if (mustSeal) throw notReachable("SEALING_UNAVAILABLE");
+    return plain(address);
   }
   let answer;
   try {
-    answer = await send(seal);
+    answer = await send(address, seal);
   } catch (error) {
     if (error instanceof RemoteError) {
       // The answer could not be verified: not the home's word, and perhaps not the home at all.
@@ -238,13 +318,13 @@ async function homeRequest(send, plain) {
       const again = { ...seal, offset: clockOffset(error.time) };
       if (lanSeal === seal) lanSeal = again;
       try {
-        answer = await send(again);
+        answer = await send(address, again);
       } catch (retry) {
         if (retry instanceof SealRefused) throw refusal(retry);
         if (retry instanceof RemoteError) throw notReachable(retry.code);
         throw retry;
       }
-    } else if (sealsHere()) {
+    } else if (mustSeal) {
       throw refusal(error);
     } else {
       // Never sealed with this controller: a key it has no lock key for yet (it gets one when the
@@ -258,11 +338,11 @@ async function homeRequest(send, plain) {
           lanSeal = null;
         }
       }
-      return plain();
+      return plain(address);
     }
   }
   // It seals: from now on this device never sends its key to this controller in the clear.
-  if (generation === sealGeneration && !sealsHere()) rememberSeal(state.host, seal.keyId, true);
+  if (route === "http" && generation === sealGeneration && !sealsHere()) rememberSeal(address, seal.keyId, true);
   return answer;
 }
 
@@ -273,50 +353,58 @@ function useTransport(transport) {
   }
 }
 
-// A request that got no answer on the home network goes through the account from then on, when
-// this device has it; HTTP answers from the home are final.
-function viaRemote(error) {
-  return !error?.status && !(error instanceof RemoteError) && savedRemote() && state.apiKey;
+// A request that got no answer on the home network goes the next way from then on: the plain
+// address after the Direct HTTPS name, then the account, when this device has it (leaveRoute).
+// HTTP answers from the home are final.
+function noAnswer(error) {
+  return !error?.status && !(error instanceof RemoteError);
+}
+
+// What a request that was waiting throws once the key is forgotten, or being forgotten.
+const notWanted = () => new ApiError("Not sent: no longer wanted", { code: "NOT_SENT" });
+
+// One request, the way in use: through the account (`remote()`), or on the home network
+// (`sealed(address, seal)`, `plain(address)`), the next way when it gets no answer. `read`: sent
+// again that way; a command never is: it may have reached the home before its answer was lost, and
+// must not run twice (pressing again sends it the next way). `since`: the key it was asked with.
+async function viaHome({ since, read, remote, sealed, plain }) {
+  for (;;) {
+    if (state.transport === "remote") return remote();
+    const route = currentRoute();
+    try {
+      return await homeRequest(route, sealed, plain);
+    } catch (error) {
+      if (since !== forgets) throw error instanceof Rerouted ? notWanted() : error;
+      if (error instanceof Rerouted) continue;
+      // The next way from now on; only a read goes there now.
+      if (!noAnswer(error) || !leaveRoute(route) || !read) throw error;
+    }
+  }
 }
 
 export async function api(path, options = {}) {
-  if (state.transport === "remote") {
-    return remoteCall(state.apiKey, path, options);
-  }
   // Once the key is forgotten, or being forgotten, nothing of this request is sent any more: not
-  // after the look at sealing, not once more (api-client.js), not through the account.
+  // after the look at sealing, not once more (api-client.js), not another way.
   const since = forgets;
   const request = { ...options, wanted: () => since === forgets };
-  try {
-    return await homeRequest(
-      (seal) => lanCall(state.host, state.apiKey, seal, path, request),
-      () => apiCall(state.host, path, { apiKey: state.apiKey, ...request })
-    );
-  } catch (error) {
-    if (!viaRemote(error) || since !== forgets) throw error;
-    useTransport("remote");
-    // Only reads are sent again: a command may have reached the home before its answer was lost,
-    // and must not run twice. Pressing again sends it through the account.
-    if ((options.method || "GET") !== "GET") throw error;
-    return remoteCall(state.apiKey, path, options);
-  }
+  return viaHome({
+    since,
+    read: (options.method || "GET") === "GET",
+    remote: () => remoteCall(state.apiKey, path, options),
+    sealed: (address, seal) => lanCall(address, state.apiKey, seal, path, request),
+    plain: (address) => apiCall(address, path, { apiKey: state.apiKey, ...request }),
+  });
 }
 
 // A camera picture, over whichever connection is in use.
 export async function image(path) {
-  if (state.transport === "remote") {
-    return remoteImage(state.apiKey, path);
-  }
-  try {
-    return await homeRequest(
-      (seal) => lanImage(state.host, state.apiKey, seal, path),
-      () => apiImage(state.host, path, { apiKey: state.apiKey })
-    );
-  } catch (error) {
-    if (!viaRemote(error)) throw error;
-    useTransport("remote");
-    return remoteImage(state.apiKey, path);
-  }
+  return viaHome({
+    since: forgets,
+    read: true,
+    remote: () => remoteImage(state.apiKey, path),
+    sealed: (address, seal) => lanImage(address, state.apiKey, seal, path),
+    plain: (address) => apiImage(address, path, { apiKey: state.apiKey }),
+  });
 }
 
 const CHECK_IN_KEY = "directorlink.checkIn"; // { home, at }: this device's last sealed request
@@ -346,30 +434,82 @@ export async function checkInThroughAccount(force = false) {
   }
 }
 
-// Away from home, look once a minute whether the home network is back; it is faster. Only this
-// home's controller counts, and only a request sealed with this device's key proves it: another
-// network may have a device at the same address, and nothing unsealed is trusted. The key is never
-// sent to find out, and whatever answers, it is kept. (With a driver before 1.0.0 the app stays with
-// the account until it starts again.)
-async function tryHomeNetwork() {
-  const remote = savedRemote();
-  if (state.transport !== "remote" || IS_IOS || !state.host || !remote || !state.apiKey) return;
+// Away from home, look once a minute whether the home network is back; it is faster: the Direct
+// HTTPS name first, then (not on iPhone and iPad) the address. At home on the plain address, look
+// whether the name answers: it is the better way. Only this home's controller counts, and only a
+// request sealed with this device's key proves it: another network may have a device at the same
+// address, and nothing unsealed is trusted. The key is never sent to find out, and whatever
+// answers, it is kept. (With a driver before 1.0.0 the app stays with the account until it starts
+// again.)
+let lookingForHome = null;
+function tryHomeNetwork() {
+  if (!state.apiKey) return Promise.resolve();
+  lookingForHome ??= (async () => {
+    try {
+      const routes = homeRoutes();
+      const better = state.transport === "remote" ? (savedRemote() ? routes : []) : routes.slice(0, Math.max(0, routes.indexOf(state.lanRoute)));
+      for (const route of better) {
+        if (await homeAnswersAt(route)) return;
+      }
+    } finally {
+      lookingForHome = null;
+    }
+  })();
+  return lookingForHome;
+}
+
+// Whether this home's controller answers the way `route`, sealed; if it does, the app goes that way.
+async function homeAnswersAt(route) {
+  const address = addressOf(route);
+  const keyId = sealHere()?.keyId || savedRemote()?.keyId;
+  if (!address || !keyId || !state.apiKey) return false;
+  const from = connection();
   const generation = sealGeneration;
   const since = forgets;
   const wanted = () => since === forgets;
   try {
-    const result = await apiRequest(state.host, "/v1/sealed", { timeoutMs: 2500, wanted });
-    if (!result.ok || since !== forgets) return;
-    const seal = { home: LAN_HOME, keyId: sealHere()?.keyId || remote.keyId, offset: clockOffset(result.data?.time) };
+    // The name's look is sent once: away from home it leads nowhere, and must not hold the app up.
+    const result = await homeNetworkRequest(address, "/v1/sealed", { timeoutMs: DIRECT_PROBE_MS, wanted, ...(route === "https" ? { retry: false } : {}) });
+    if (!result.ok || since !== forgets) return false;
+    const seal = { home: LAN_HOME, keyId, offset: clockOffset(result.data?.time) };
     // A read without an answer is sent once more (remote.js), but not once the key is forgotten.
-    await lanCall(state.host, state.apiKey, seal, "/v1/api-keys/current", { timeoutMs: 2500, wanted });
-    if (generation !== sealGeneration || state.transport !== "remote") return;
-    rememberSeal(state.host, seal.keyId, true);
+    await lanCall(address, state.apiKey, seal, "/v1/api-keys/current", { timeoutMs: DIRECT_PROBE_MS, wanted });
+    if (generation !== sealGeneration || since !== forgets || connection() !== from) return false;
+    if (route === "http") rememberSeal(address, keyId, true);
+    state.lanRoute = route;
+    resetSeal();
     lanSeal = seal;
     useTransport("lan");
+    notify();
+    return true;
   } catch {
-    // Still away.
+    // Still away, or not that way.
+    return false;
   }
+}
+
+// GET /v1/system's `direct_https` (1.12.0): remembered for this home while the controller serves it,
+// forgotten otherwise (an older DirectorLink has none). Going that way stops once it is gone; a new
+// name is tried at once.
+function noteDirect(system) {
+  if (!system || typeof system !== "object") return;
+  const before = directHere();
+  const now = rememberDirect(system.direct_https, savedRemote()?.home || null);
+  if (!now) {
+    if (state.transport === "lan" && state.lanRoute === "https") leaveRoute("https");
+  } else if (before?.origin !== now.origin) {
+    tryHomeNetwork();
+  }
+}
+
+// GET /v1/system again (Settings → Controller → Direct connection at home, once it changed).
+export async function readSystem() {
+  const since = forgets;
+  const system = await api("/v1/system");
+  if (since !== forgets) return;
+  state.system = system;
+  noteDirect(system);
+  notify();
 }
 
 // The new key's name, e.g. "Chrome on Windows" or "Safari on iPhone" (the API console lists it).
@@ -398,10 +538,13 @@ export function clientName() {
   return (system ? `${browser} on ${system}` : `${browser} (DirectorLink app)`).slice(0, 64);
 }
 
+// The saved address, key and Direct HTTPS name: at home the best way first, before anything is read.
 export function restoreSaved() {
   state.host = savedHost();
   state.apiKey = savedApiKey();
-  state.transport = (IS_IOS || !state.host) && savedRemote() ? "remote" : "lan";
+  const routes = homeRoutes();
+  state.lanRoute = routes[0] || "http";
+  state.transport = !routes.length && savedRemote() ? "remote" : "lan";
   state.status = reachable() ? "connecting" : "setup";
 }
 
@@ -430,6 +573,7 @@ export function forgetKey() {
   forgetSealing();
   forgetRemote();
   state.transport = "lan";
+  state.lanRoute = "http";
   state.remoteInfo = null;
   stopPolling();
   state.apiKey = "";
@@ -686,6 +830,7 @@ async function loadAll() {
     optionalList("/v1/refrigerators"),
   ]);
   state.system = system;
+  noteDirect(system);
   state.rooms = rooms?.items || [];
   state.lights = lights?.items || [];
   // Each in its own scale, °F or °C (1.10.2, temperature.js).
@@ -750,7 +895,9 @@ export async function connect() {
   const run = ++connectRun;
   const since = forgets;
   state.status = "connecting";
-  // Sealing is looked at again: the driver may have been updated.
+  // At home, the best way first again (the Direct HTTPS name), and sealing is looked at again: the
+  // driver may have been updated.
+  if (state.transport === "lan" && homeRoutes().length) state.lanRoute = homeRoutes()[0];
   resetSeal();
   notify();
   try {
@@ -769,9 +916,10 @@ export async function connect() {
     }
     console.error("DirectorLink connection failed", error);
     state.notice = connectionNotice(error);
-    // The next attempt tries the home network first again.
-    if (state.transport === "remote" && !IS_IOS && state.host) {
+    // The next attempt tries the home network first again, the best way first.
+    if (state.transport === "remote" && homeRoutes().length) {
       state.transport = "lan";
+      state.lanRoute = homeRoutes()[0];
     }
     state.status = "unreachable";
     scheduleRetry();
@@ -848,6 +996,7 @@ export async function pairWithCode(hostValue, pairingCode, { anyway = false } = 
     // Remote access belonged to the previous key: link the home again for this one.
     forgetRemote();
     state.transport = "lan";
+    state.lanRoute = "http";
     state.remoteInfo = null;
     return connect();
   } catch (error) {
@@ -926,6 +1075,7 @@ export async function refreshRooms() {
     ]);
     if (since !== forgets) return;
     state.system = system || state.system;
+    noteDirect(system);
     state.rooms = rooms?.items || state.rooms;
     state.cameras = cameras?.items || state.cameras;
     state.relays = relays;
@@ -1012,11 +1162,21 @@ export async function revokeAndForget() {
   if (reachable()) {
     try {
       // Any key may revoke itself (drivers with API key roles). Without an answer on the home
-      // network it is revoked through the account (revoking twice changes nothing).
-      await api("/v1/api-keys/current", { method: "DELETE", timeoutMs: 4000 }).catch((error) => {
-        if (error?.status || error instanceof RemoteError || !savedRemote()) throw error;
-        return remoteCall(state.apiKey, "/v1/api-keys/current", { method: "DELETE" });
-      });
+      // network it is revoked the next way: the address after the Direct HTTPS name, then the
+      // account (revoking twice changes nothing).
+      for (;;) {
+        const from = connection();
+        try {
+          await api("/v1/api-keys/current", { method: "DELETE", timeoutMs: 4000 });
+          break;
+        } catch (error) {
+          if (error?.status || error instanceof RemoteError) throw error;
+          if (connection() !== from) continue;
+          if (!savedRemote()) throw error;
+          await remoteCall(state.apiKey, "/v1/api-keys/current", { method: "DELETE" });
+          break;
+        }
+      }
     } catch (error) {
       if (error?.status === 404 || error?.status === 405) {
         // Older driver: find this key in the list and revoke it (every key was admin there).

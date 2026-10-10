@@ -243,11 +243,12 @@ admin, without removing anyone (*Handing the home to another admin*, below).
 
 ### 2. Away from home
 
-The app tries the controller on the home network first, because that is faster. If the controller
-cannot be reached, and always on iPhone and iPad, the app sends locked envelopes to the cloud with
-the account's session. The cloud checks that the account is a member of the home and passes the
-envelope to the home's relay connection. The controller unlocks it, runs it as that key (with that
-key's role), locks the answer and sends it back.
+The app tries the controller on the home network first, because that is faster: since 1.12.0 at its
+own HTTPS name first, when the home's owner turned on Direct connection at home (ADR-082), then (not
+on iPhone and iPad) at its address. If the controller cannot be reached that way, the app sends
+locked envelopes to the cloud with the account's session. The cloud checks that the account is a
+member of the home and passes the envelope to the home's relay connection. The controller unlocks
+it, runs it as that key (with that key's role), locks the answer and sends it back.
 
 ### 3. Invitations: family, and the owner's own other devices
 
@@ -777,11 +778,14 @@ device's key.
 
 ## iPhone and iPad
 
-They cannot use the home-network connection: WebKit blocks it (see the README). With this design
-they always go through the cloud, locked, even at home. The owner still has to claim the home once
-from a computer or an Android phone; the owner's iPhone then joins as *my other device*, or (1.7.0)
-with **Join from another device**, which the Home Screen app needs: it gets no links (*Join from
-another device*, above).
+They cannot use the home-network connection at the controller's address: WebKit blocks it (see the
+README). Until 1.12.0 they always went through the cloud, locked, even at home. Since 1.12.0, when
+the home's owner turns on Direct connection at home (Settings → Controller, ADR-082), they reach
+the controller at its own HTTPS name on the home network, sealed the same way, and go through the
+cloud only away from home (`app/README.md`, Direct connection at home). The owner still has to
+claim the home once from a computer or an Android phone; the owner's iPhone then joins as *my other
+device*, or (1.7.0) with **Join from another device**, which the Home Screen app needs: it gets no
+links (*Join from another device*, above).
 
 ## Phases
 

@@ -2090,6 +2090,28 @@ export default {
       },
     },
   },
+  // Settings → Controller → Direct connection at home (1.12.0, ADR-082; js/views/direct.js).
+  directHttps: {
+    title: "חיבור ישיר בבית",
+    label: "חיבור ישיר בבית",
+    intro: "כשזה פועל, כל מכשיר, גם iPhone ו-iPad, מתחבר לבקר ישירות ברשת הביתית: מהר יותר, ובלי השרתים של DirectorLink.",
+    how: "לשם כך הבקר מקבל שם אקראי תחת dlhome.cc שמפנה לכתובת שלו ברשת הביתית, שרק מכשירים בבית יכולים להגיע אליה. השם מופיע בפומבי ביומני התעודות, והשרתים של DirectorLink יודעים את השם ואת הכתובת הזו.",
+    chrome: "ב-Android ובמחשבים, Chrome עשוי לבקש גישה למכשירים ברשת המקומית: אשרו.",
+    stateLabel: "מצב:",
+    state: {
+      off: "כבוי",
+      requesting: "מקבל תעודה…",
+      listening: "פועל עד {date}",
+      on: "פועל",
+      error: "לא הצליח: {error}",
+      errorUnknown: "לא הצליח",
+      notAllowed: "לא מאושר ב-Composer",
+    },
+    notAllowed: "המתקין צריך לאשר את זה קודם: ב-Composer, הגדירו את המאפיין Direct HTTPS של DirectorLink ל-Allowed.",
+    remoteNeeded: "צריך ש-Remote Access יהיה מופעל ב-Composer, ושהבית יהיה מקושר לחשבון שלכם.",
+    remoteLink: "קשרו אותו בהגדרות ← חשבון",
+    ownerOnly: "רק בעל הבית יכול להפעיל או לכבות את זה.",
+  },
   settings: {
     title: "הגדרות",
     rows: {
@@ -2197,6 +2219,12 @@ export default {
         other: "גם {count} הקישורים לסצנות שנוצרו במכשיר הזה יפסיקו לעבוד.",
       },
       forgotten: "מפתח הגישה הוסר מהמכשיר.",
+      thisDevice: "המכשיר הזה",
+      via: {
+        https: "ברשת הביתית, ישירות (HTTPS)",
+        http: "ברשת הביתית",
+        remote: "דרך השרתים של DirectorLink",
+      },
     },
     account: {
       title: "חשבון",

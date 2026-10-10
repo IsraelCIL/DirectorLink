@@ -203,4 +203,50 @@ function tests.secrets_differ_even_if_directors_uuids_do_not()
     T.truthy(mock.persist.directorlink_entropy, "the pool is kept across restarts")
 end
 
+-- On a 32-bit controller C's unsigned long has 32 bits, and Lua 5.1's tonumber(hex, 16) caps
+-- every number above it at 4294967295: up to 1.11.0 every pairing code there was 9496 7295.
+function tests.pairing_codes_vary_where_tonumber_caps_hex_at_32_bits()
+    Mock.startDriver()
+    local Random = require("src.core.random")
+    local realToNumber = tonumber
+    tonumber = function(value, base)
+        local number = realToNumber(value, base)
+        if base == 16 and number and number > 4294967295 then
+            return 4294967295
+        end
+        return number
+    end
+    local ok, failure = pcall(function()
+        local seen, count = {}, 0
+        for _ = 1, 40 do
+            local value = Random.below(100000000)
+            T.truthy(value >= 0 and value < 100000000 and value % 1 == 0, "a whole number below the limit")
+            if not seen[value] then
+                seen[value], count = true, count + 1
+            end
+        end
+        T.truthy(count >= 39, "pairing codes differ: " .. count .. " of 40")
+    end)
+    tonumber = realToNumber
+    if not ok then
+        error(failure, 0)
+    end
+end
+
+function tests.random_below_stays_below_small_and_large_limits()
+    Mock.startDriver()
+    local Random = require("src.core.random")
+    local hits = {}
+    for _ = 1, 300 do
+        local value = Random.below(3)
+        T.truthy(value == 0 or value == 1 or value == 2)
+        hits[value] = true
+    end
+    T.truthy(hits[0] and hits[1] and hits[2], "every value comes up")
+    for _ = 1, 20 do
+        local value = Random.below(2 ^ 40)
+        T.truthy(value >= 0 and value < 2 ^ 40 and value % 1 == 0)
+    end
+end
+
 return tests

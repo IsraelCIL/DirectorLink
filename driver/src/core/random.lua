@@ -130,9 +130,22 @@ function Random.bytes(count)
     end))
 end
 
--- A random integer from 0 to `limit` - 1 (limit up to 2^40), without modulo bias worth noting.
+-- A random integer from 0 to `limit` - 1 (limit up to 2^40). From 48 random bits added up byte by
+-- byte: up to 1.11.0 it read 52 bits with tonumber(hex, 16), which a Lua whose C unsigned long has
+-- 32 bits (32-bit controllers) caps at 4294967295, so every pairing code there was 9496 7295.
+-- A draw past the last whole multiple of `limit` is drawn again: no modulo bias.
+local SPAN = 2 ^ 48
 function Random.below(limit)
-    return tonumber(Random.hex(16):sub(1, 13), 16) % limit
+    local cutoff = SPAN - SPAN % limit
+    while true do
+        local bytes, value = Random.bytes(6), 0
+        for index = 1, 6 do
+            value = value * 256 + bytes:byte(index)
+        end
+        if value < cutoff then
+            return value % limit
+        end
+    end
 end
 
 -- Forgets the pool in memory (tests: a new driver instance).

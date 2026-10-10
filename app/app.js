@@ -16,7 +16,8 @@ import { notificationSupport, notificationsOn, ringingDoorbells } from "./js/doo
 import { currentLanguage, setLanguage, t } from "./js/i18n.js";
 import { icon } from "./js/icons.js";
 import { startPwa } from "./js/pwa.js";
-import { joinView, storeInvitation } from "./js/views/join.js";
+import { joinView, joinedNotice, storeInvitation } from "./js/views/join.js";
+import { moveSignature } from "./js/views/move.js";
 import { deviceJoinSignature, deviceRequestNotice, watchDeviceRequests } from "./js/views/device-join.js";
 import { musicRouteChanged, musicSignature, startMusic } from "./js/music.js";
 import { accessView, resetAccess } from "./js/views/access.js";
@@ -324,6 +325,12 @@ function signature() {
     ui.joinBusy,
     ui.joinMessage,
     ui.joinWait,
+    // Joining in the Home Screen app, whom this device joined as, a name asked for, a move (1.12.0).
+    ui.joinHere,
+    ui.joinCopied,
+    ui.joined,
+    ui.nameCard ? { ...ui.nameCard, draft: undefined } : null,
+    moveSignature(),
     state.profile,
     ui.roomOrderMessage,
     state.scenes,
@@ -477,6 +484,9 @@ function render(force = false) {
   // A new device of the account asks to join this home (ADR-053): under the header, on every screen.
   const request = deviceRequestNotice();
   if (request) content.splice(1, 0, request);
+  // "You joined <home> as <user>." (1.12.0), from the home's sealed answer, until dismissed.
+  const joined = route.name === "join" ? null : joinedNotice();
+  if (joined) content.splice(1, 0, joined);
   // What stays the same element (Home's command field) stays in the page.
   replaceKeeping(view, content);
   restoreUi(saved);

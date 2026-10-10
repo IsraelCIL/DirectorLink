@@ -75,6 +75,13 @@ Since 1.9.0 (ADR-061, `features.users`):
 - Every key may revoke the other keys of its own user (`DELETE /v1/api-keys/{keyId}`) and invite its own other device (`POST /v1/invitations` with `for_me`); an admin may invite another device of a user (`profile_id`).
 - `POST /v1/users/owner` `{"profile_id"}` (ADR-064): the home's owner, and only the owner (`403 OWNER_ONLY`), makes another admin user the owner (`409 NOT_AN_ADMIN` for a member); the old owner stays an admin and nobody is removed. A home linked to an account moves in the account service first: `409 OWNER_NEEDS_ACCOUNT` when the new owner's devices use no account of the home, `503 REMOTE_OFFLINE` when it does not answer; `account_service` in the answer says what it did. History: `access` `owner_changed`.
 
+Since 1.12.0 (ADR-083, `features.user_names`):
+
+- `POST /v1/invitations` (admins) takes the new user's `name` with `role`/`access`: whoever accepts becomes a user of that name. The name stays on the controller (the account service is told the invitation's id, email and expiry only); the joining device reads it in the sealed answer (`user`, `home_name`). `GET /v1/invitations` lists it as `name`.
+- `POST /v1/invitations` `{"for_me": true, "move": true}` (any key): a move invitation, 10 minutes at most, one per device. The device that accepts it joins the same user, and the key that made it is revoked at the new key's first sealed request (only while both are devices of that user): as many devices as before, five or not. History: `access` `moved`.
+- `PATCH /v1/profile` `{"name"}`: any key names its own user; `GET /v1/profile` says `name_from_device` while the user's name is still one of their devices' names.
+- `PATCH /v1/api-keys/{keyId}` `{"name"}`: a member renames the devices of their own user (`404` for any other; `role` and `profile_id` stay the admins', `403`).
+
 ## Thermostats
 
 Most thermostats have one `target_temperature` (`"setpoints": "single"`). Thermostats with separate heat and cool setpoints (`"setpoints": "dual"`, the Control4 thermostat) also report both, and the smallest gap they keep between them:

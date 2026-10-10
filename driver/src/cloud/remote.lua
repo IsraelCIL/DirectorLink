@@ -288,6 +288,7 @@ local function handleE2e(message, send)
         return
     end
     state.services.keys.touch(keyId)
+    Remote.finishMove(keyId)
     local answered = false
     run(request, { id = key.id, name = key.name, role = key.role, profile = key.profile, remote = true }, function(status, headers, body)
         if answered then
@@ -319,6 +320,7 @@ function Remote.handleLocal(envelope, client, done)
         return
     end
     state.services.keys.touch(keyId)
+    Remote.finishMove(keyId)
     local answered = false
     run(request, { id = key.id, name = key.name, role = key.role, profile = key.profile, remote = false, sealed = true }, function(status, headers, body)
         if answered then
@@ -327,6 +329,49 @@ function Remote.handleLocal(envelope, client, done)
         answered = true
         done(sealAnswer(key.lock, Remote.LAN_HOME, keyId, request, status, headerValue(headers, "content-type"), body))
     end, client)
+end
+
+-- The home's name as Composer's project has it: its site, the top of the project tree (as a
+-- backup names it, src/core/backup.lua); nil when there is none.
+function Remote.homeName()
+    local registry = state.services and state.services.registry
+    local found
+    for id, location in pairs(registry and registry.locations or {}) do
+        local number = tonumber(id)
+        if type(location) == "table" and location.type == "site" and type(location.name) == "string" and location.name ~= ""
+            and number and (not found or number < found.id) then
+            found = { id = number, name = location.name }
+        end
+    end
+    return found and (found.name:gsub("[%c]", "")) or nil
+end
+
+-- The key `keyId` was used, sealed (through the account or at home): when a move invitation made it
+-- (1.12.0, ADR-083), the device it moved from goes now, only if it is still a device of the same
+-- user. The new device surely has its key by now, so a join whose answer was lost never leaves the
+-- user without either.
+function Remote.finishMove(keyId)
+    local services = state.services
+    local move = services and services.invitations and services.invitations.takeMove and services.invitations.takeMove(keyId)
+    if not move then
+        return false
+    end
+    local newer = services.keys.find(keyId)
+    local older = services.keys.find(move.replaces)
+    if not (newer and older and newer.profile == move.profile and older.profile == move.profile) then
+        log("info", "a move was not finished: its device is gone or in another user", { key_id = keyId, replaces = move.replaces })
+        return false
+    end
+    if not services.keys.revoke(older.id) then
+        return false
+    end
+    services.invitations.revokeCreatedBy(older.id)
+    log("info", "a device moved: the key it moved from was revoked", { key_id = keyId, replaces = older.id })
+    Activity.record("access", "moved", { by = keyId, what = newer.name, from = older.name, ids = { key_id = keyId } })
+    if services.onKeysChanged then
+        pcall(services.onKeysChanged)
+    end
+    return true
 end
 
 -- The home id sealed requests name, and how far their clock may be off.
@@ -373,6 +418,22 @@ local function handleJoin(message, send)
         send({ type = "join_result", id = message.id, ok = false, code = "INVITATION_NOT_FOUND" })
         return
     end
+    -- A move invitation (1.12.0, ADR-083): only while the key that made it is still a device of that
+    -- same user, whose place the new key takes; otherwise it moves nothing and makes nobody a user.
+    local moving = nil
+    if invitation.move then
+        moving = state.services.keys.find(invitation.move)
+        if not profile and profiles and not profiles.complete() then
+            send({ type = "join_result", id = message.id, ok = false, code = "UNAVAILABLE" })
+            return
+        end
+        if not (moving and profile and moving.profile == profile.id and invitation.created_by == invitation.move) then
+            log("warn", "refused a move invitation whose device is gone or in another user", { invitation = invitationId })
+            state.services.invitations.revoke(invitationId)
+            send({ type = "join_result", id = message.id, ok = false, code = "INVITATION_NOT_FOUND" })
+            return
+        end
+    end
     -- Into an existing person only as the admin who made the invitation may put a device there
     -- (ADR-054: Access.mayChangePerson, the owner's only by the owner), now as when it was made;
     -- since 1.9.0 (ADR-061) also a member's own other device, into their own user.
@@ -390,8 +451,9 @@ local function handleJoin(message, send)
             send({ type = "join_result", id = message.id, ok = false, code = refusal == "UNAVAILABLE" and "UNAVAILABLE" or "INVITATION_NOT_FOUND" })
             return
         end
-        -- Up to five devices a user: the invitation stays, so that it works once one is removed.
-        if Users.full(profile.id) then
+        -- Up to five devices a user: the invitation stays, so that it works once one is removed. A
+        -- move adds none: the device it moves from goes.
+        if Users.full(profile.id) and not (moving and #Users.devices(profile.id) <= Users.DEVICE_LIMIT) then
             log("info", "refused an invitation into a user who has five devices", { invitation = invitationId })
             send({ type = "join_result", id = message.id, ok = false, code = "USER_DEVICE_LIMIT" })
             return
@@ -411,7 +473,8 @@ local function handleJoin(message, send)
     end
     if profiles and not profile then
         local failure
-        profile, failure = profiles.create(name)
+        -- The name the admin gave the new user (1.12.0, ADR-083), else the device's own.
+        profile, failure = profiles.create(invitation.user_name or name)
         if failure == "UNAVAILABLE" then
             send({ type = "join_result", id = message.id, ok = false, code = "UNAVAILABLE" })
             return
@@ -438,12 +501,29 @@ local function handleJoin(message, send)
         return
     end
     state.services.invitations.consume(invitationId)
+    -- The device it moves from goes at the new key's first use (Remote.finishMove), once the new
+    -- device surely has its key: a join whose answer is lost on its way leaves both.
+    if moving then
+        state.services.invitations.recordMove(record.id, moving.id, profile.id)
+    end
     if state.services.onKeysChanged then
         pcall(state.services.onKeysChanged)
     end
-    log("info", "an invitation was accepted", { invitation = invitationId, key_id = record.id, role = record.role })
+    log("info", "an invitation was accepted", { invitation = invitationId, key_id = record.id, role = record.role, move = moving and moving.id or nil })
     Activity.record("access", "joined", { by = record.id, what = record.name, to = record.role, ids = { key_id = record.id, invitation_id = invitationId } })
-    local body = Json.encode({ key = record.secret, id = record.id, name = record.name, role = record.role, created_at = record.created_at })
+    -- With the user it joined and the home's name (1.12.0, ADR-083), sealed: only this device reads
+    -- them ("You joined <home> as <user>"); the account service never sees either.
+    local joined = profile and profiles and profiles.find(profile.id) or profile
+    local body = Json.encode({
+        key = record.secret,
+        id = record.id,
+        name = record.name,
+        role = record.role,
+        created_at = record.created_at,
+        user = joined and { id = joined.id, name = joined.name } or nil,
+        home_name = Remote.homeName(),
+        moved = moving ~= nil or nil,
+    })
     local envelope = sealAnswer(invitation.lock, state.homeId(), invitationId, request, 201, "application/json; charset=utf-8", body)
     send({ type = "join_result", id = message.id, ok = true, key_id = record.id, envelope = envelope })
 end

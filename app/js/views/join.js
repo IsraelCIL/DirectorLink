@@ -3,16 +3,25 @@
 // but is never sent to a server or left in the history. An invitation for another email waits for
 // the home's owner to approve this account (ADR-041): the page shows a code to read out to them,
 // asks every few seconds, and finishes by itself once they have.
+//
+// Since 1.12.0 (ADR-083): opened in a browser on iPhone or iPad (Safari, not the Home Screen app),
+// the page first recommends joining in the Home Screen app, which has its own storage and gets
+// alerts: copy the link, add DirectorLink to the Home Screen, open it there and paste the link in
+// Join with an invitation. Joining here stays possible (Join here in Safari). Once joined, the home
+// says in its sealed answer which user this device joined as, and the home's name: "You joined
+// <home> as <user>." shows over the next screen. Neither is ever sent to DirectorLink's servers.
 
 import { clearHost, saveApiKey } from "../../api-client.js";
 import { loadAccount } from "../account.js";
 import { h } from "../dom.js";
 import { formatDateTime, t } from "../i18n.js";
 import { icon } from "../icons.js";
-import { RemoteError, acceptInvitation, checkJoinRequest, joinCodeText, parseInvitation, saveRemote, withdrawJoinRequest } from "../remote.js";
+import { inIosBrowser, isSafari } from "../home-screen.js";
+import { RemoteError, acceptInvitation, checkJoinRequest, invitationLink, joinCodeText, parseInvitation, saveRemote, withdrawJoinRequest } from "../remote.js";
 import { clientName, connect, errorText, forgetSealing } from "../session.js";
 import { notify, state, ui } from "../state.js";
 import { pageHeader, signInButtons } from "./common.js";
+import { homeScreenSteps } from "./move.js";
 
 const JOIN_KEY = "directorlink.join";
 // The invitation this tab asked the home's owner about, so a reload carries on waiting.
@@ -111,6 +120,8 @@ export function useInvitation(text, navigate, { accept: now = false } = {}) {
   ui.joinMessage = null;
   ui.joinChecked = null;
   ui.joinConfirmed = false;
+  ui.joinCopied = null;
+  ui.joinHere = false;
   navigate("#/join");
   // Accepted from memory even where this tab cannot keep it.
   const invitation = storedInvitation() || parseInvitation(text);
@@ -158,6 +169,8 @@ async function accept(invitation, navigate, { confirmed = false } = {}) {
     state.transport = "remote";
     state.status = "connecting";
     clearInvitation();
+    // Whom this device joined as, from the home's sealed answer (1.12.0): said over the next screen.
+    ui.joined = typeof key.user?.name === "string" && key.user.name ? { user: key.user.name.slice(0, 64), home: typeof key.home_name === "string" ? key.home_name.slice(0, 64) : "" } : null;
     navigate("#/");
     connect();
   } catch (error) {
@@ -302,12 +315,93 @@ function waitingContent(invitation, navigate) {
   ];
 }
 
+// "You joined Cohen Home as Dana.", once, over the screen after joining; dismissed with Done.
+export function joinedNotice() {
+  const joined = ui.joined;
+  if (!joined) return null;
+  return h(
+    "section",
+    { class: "card joined-notice", role: "status", dataset: { key: "joined" } },
+    h("p", { class: "notice notice-success", dir: "auto" }, joined.home ? t("join.joined", { home: joined.home, name: joined.user }) : t("join.joinedNoHome", { name: joined.user })),
+    h(
+      "div",
+      { class: "button-row" },
+      h(
+        "button",
+        {
+          type: "button",
+          class: "button button-quiet button-small",
+          dataset: { key: "joined-done" },
+          onclick: () => {
+            ui.joined = null;
+            notify();
+          },
+        },
+        t("common.done")
+      )
+    )
+  );
+}
+
+// On iPhone and iPad, in a browser: join in the Home Screen app instead (1.12.0, ADR-083).
+function homeScreenAdvice(invitation) {
+  const link = invitationLink(invitation.home, { id: invitation.invitation, secret: invitation.secret });
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      ui.joinCopied = "copied";
+    } catch {
+      ui.joinCopied = "failed";
+    }
+    notify();
+  };
+  return h(
+    "div",
+    { class: "join-home-screen", dataset: { key: "join-home-screen" } },
+    h("h3", { class: "settings-subtitle" }, t("join.homeScreen.title")),
+    h("p", { class: "connect-text" }, t("join.homeScreen.text")),
+    homeScreenSteps("join"),
+    ui.joinCopied === "failed"
+      ? h("input", { class: "invitation-link", type: "text", readonly: true, dir: "ltr", value: link, "aria-label": t("settings.account.home.linkLabel"), onfocus: (event) => event.target.select() })
+      : null,
+    ui.joinCopied
+      ? h("p", { class: `notice ${ui.joinCopied === "copied" ? "notice-success" : "notice-error"}`, role: "status" }, ui.joinCopied === "copied" ? t("join.homeScreen.copied") : t("settings.account.home.copyFailed"))
+      : null,
+    h(
+      "div",
+      { class: "button-row" },
+      h("button", { type: "button", class: "button button-primary button-wide", dataset: { key: "join-copy" }, onclick: copy }, icon("copy"), t("move.copy"))
+    ),
+    h(
+      "div",
+      { class: "button-row" },
+      h(
+        "button",
+        {
+          type: "button",
+          class: "button button-quiet button-wide",
+          dataset: { key: "join-here" },
+          onclick: () => {
+            ui.joinHere = true;
+            notify();
+          },
+        },
+        isSafari() ? t("join.homeScreen.here") : t("join.homeScreen.hereBrowser")
+      )
+    )
+  );
+}
+
 export function joinView({ navigate }) {
   const invitation = storedInvitation();
   const account = state.account;
   const content = [];
+  const waiting = invitation && ui.joinWait && ui.joinWait.for === invitationKey(invitation);
   if (!invitation) {
     content.push(h("p", { class: "connect-text" }, t("join.missing")));
+  } else if (inIosBrowser() && !ui.joinHere && !waiting && !asked(invitationKey(invitation))) {
+    // In Safari on iPhone or iPad: the Home Screen app first; here only when chosen.
+    content.push(h("p", { class: "connect-text" }, t("join.intro")), homeScreenAdvice(invitation));
   } else if (account.status === "unknown" || account.status === "loading") {
     content.push(h("p", { class: "field-help", role: "status" }, t("common.loading")));
   } else if (account.status !== "signed-in") {

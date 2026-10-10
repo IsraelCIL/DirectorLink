@@ -2,7 +2,9 @@
 // Controller (its facts, updates, backup, pairing), Rooms (shown, order, names and the Sonos rooms),
 // Shabbat and holidays, Users (#/access, views/access.js), Account, Alerts (this device's, 1.10.0:
 // views/alerts.js), Appearance and language (language, theme, colours and text size, 1.10.0), App
-// and About.
+// and About. Since 1.12.0 (ADR-083) a user still named after a device is asked their name once, at
+// the top of the list; Account no longer invites someone (Settings → Users → Add a user does), and
+// a Safari tab on iPhone or iPad moves to the Home Screen app there (views/move.js).
 
 import { deleteAccount, loadAccount, removeProvider, signIn, signInProviders, signOut } from "../account.js";
 import { turnAlertsOff } from "../alerts.js";
@@ -25,6 +27,7 @@ import { can, notify, state, ui } from "../state.js";
 import { alarmFact } from "./alarm.js";
 import { alertsPage, alertsStatus } from "./alerts.js";
 import { makeInvitation, pasteInvitationPanel } from "./device-join.js";
+import { movePanel } from "./move.js";
 import { deviceLimitOf, deviceLimitPanel } from "./device-limit.js";
 import { accessBody, newMemberAccess, peopleSupported, permissionsEditor } from "./permissions.js";
 import { loadScenes } from "../scenes.js";
@@ -62,7 +65,7 @@ export function settingsView({ page = null, onPalette, onTheme, onLanguage, onTe
       return [
         pageHeader({ title: t("settings.title") }),
         offlineBanner(),
-        h("div", { class: "settings" }, pageRows()),
+        h("div", { class: "settings" }, nameCard(), pageRows()),
         h("p", { class: "independent-note", dataset: { key: "settings-independent" } }, t("settings.about.independent")),
       ];
   }
@@ -74,6 +77,112 @@ function subpage(title, ...sections) {
   const header = pageHeader({ title, back: "#/settings" });
   header.className = `${header.className} settings-page-header`;
   return [header, offlineBanner(), h("div", { class: "settings" }, ...sections)];
+}
+
+// ---- What's your name? (1.12.0, ADR-083) ------------------------------------------------------
+
+// The names the app gives a device (session.js clientName): a user called that was made by a
+// device that joined or paired, before anyone named them.
+const DEVICE_NAME = /^(?:(?:Safari|Chrome|Edge|Firefox|Opera|Samsung Internet|Browser|DirectorLink app|Home Screen app) on (?:iPhone|iPad|Android|Windows|ChromeOS|Mac|Linux)|[A-Za-z][A-Za-z ]{0,30} \(DirectorLink app\)|DirectorLink app|Invited device|Paired client)$/;
+
+export function deviceLikeName(name) {
+  return typeof name === "string" && DEVICE_NAME.test(name.trim());
+}
+
+const NAME_ASKED_KEY = "directorlink.nameAsked"; // { [profile id]: true }: asked once on this device
+
+function nameAsked(profileId) {
+  try {
+    return JSON.parse(localStorage.getItem(NAME_ASKED_KEY) || "{}")?.[profileId] === true;
+  } catch {
+    return false;
+  }
+}
+
+function markNameAsked(profileId) {
+  try {
+    const value = JSON.parse(localStorage.getItem(NAME_ASKED_KEY) || "{}") || {};
+    value[profileId] = true;
+    localStorage.setItem(NAME_ASKED_KEY, JSON.stringify(value));
+  } catch {
+    // Blocked storage: asked again on the next visit.
+  }
+  ui.nameCard = { ...(ui.nameCard || {}), closed: profileId };
+}
+
+// Their name is still a device's: the controller says so (`name_from_device`), or it reads like one.
+function nameWanted() {
+  const profile = state.profile;
+  if (!state.loaded || !profile?.id || state.system?.features?.user_names !== true) return false;
+  if (ui.nameCard?.closed === profile.id || nameAsked(profile.id)) return false;
+  return profile.name_from_device === true || deviceLikeName(profile.name);
+}
+
+async function saveName(event) {
+  event?.preventDefault?.();
+  const card = ui.nameCard || {};
+  const name = (card.draft || "").trim().slice(0, 64);
+  const profileId = state.profile?.id;
+  if (!name || !profileId || card.busy) {
+    ui.nameCard = { ...card, message: name ? null : t("users.name.needed") };
+    notify();
+    return;
+  }
+  ui.nameCard = { ...card, busy: true, message: null };
+  notify();
+  try {
+    const answer = await api("/v1/profile", { method: "PATCH", body: { name } });
+    state.profile = answer && typeof answer === "object" ? { ...state.profile, ...answer, prefs: state.profile.prefs } : { ...state.profile, name };
+    markNameAsked(profileId);
+    ui.nameCard = { closed: profileId, saved: name };
+  } catch (error) {
+    ui.nameCard = { ...ui.nameCard, busy: false, message: errorText(error) };
+  }
+  notify();
+}
+
+// At the top of Settings, once on this device: a field, Save and Not now.
+function nameCard() {
+  if (ui.nameCard?.saved && ui.nameCard.closed === state.profile?.id) {
+    return h(
+      "p",
+      { class: "notice notice-success", role: "status", dataset: { key: "name-saved" } },
+      t("users.name.saved", { name: ui.nameCard.saved })
+    );
+  }
+  if (!nameWanted()) return null;
+  const card = (ui.nameCard ||= {});
+  const input = h("input", { id: "name-card-name", type: "text", maxlength: "64", autocomplete: "name", dir: "auto", value: card.draft || "", dataset: { key: "name-card-name" } });
+  input.addEventListener("input", () => {
+    card.draft = input.value;
+  });
+  return h(
+    "form",
+    { class: "card settings-card name-card", novalidate: true, dataset: { key: "name-card" }, onsubmit: saveName },
+    h("h2", { class: "settings-title" }, icon("user"), t("users.name.title")),
+    h("p", { class: "field-help", dir: "auto" }, t("users.name.help", { name: state.profile.name })),
+    h("label", { class: "field-label", for: "name-card-name" }, t("users.name.label")),
+    input,
+    card.message ? h("p", { class: "notice notice-error", role: "alert" }, card.message) : null,
+    h(
+      "div",
+      { class: "button-row" },
+      h("button", { type: "submit", class: "button button-primary", disabled: Boolean(card.busy), dataset: { key: "name-card-save" } }, t("users.name.save")),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "button button-quiet",
+          dataset: { key: "name-card-later" },
+          onclick: () => {
+            markNameAsked(state.profile.id);
+            notify();
+          },
+        },
+        t("users.name.later")
+      )
+    )
+  );
 }
 
 // ---- the list of pages ------------------------------------------------------------------------
@@ -1429,15 +1538,17 @@ function invitePanel() {
       )
     );
   }
-  // A member (1.9.0) adds their own other device; only admins invite others.
+  // A member (1.9.0) adds their own other device; only admins invite others, since 1.9.0 in
+  // Settings → Users (Add a user, 1.12.0): Account keeps Invite someone for older controllers only.
   const admin = can("admin");
+  const inviteHere = admin && !usersSupported();
   return [
-    h("p", { class: "field-help" }, admin ? t("settings.account.home.addHelp") : t("settings.account.home.addOwnHelp")),
+    h("p", { class: "field-help" }, inviteHere ? t("settings.account.home.addHelp") : admin ? t("settings.account.home.addHelpUsers") : t("settings.account.home.addOwnHelp")),
     h(
       "div",
       { class: "button-row" },
       h("button", { type: "button", class: "button button-secondary", dataset: { key: "add-device" }, disabled: Boolean(ui.homeBusy), onclick: () => createInvitation({ forSelf: true }) }, icon("plus"), t("settings.account.home.addDevice")),
-      admin
+      inviteHere
         ? h("button", { type: "button", class: "button button-secondary", dataset: { key: "invite" }, disabled: Boolean(ui.homeBusy), onclick: () => { ui.inviteForm = true; notify(); } }, icon("user"), t("settings.account.home.invite"))
         : null
     ),
@@ -1466,6 +1577,8 @@ function homeSection() {
       content.push(updateRequiredNotice(state.remoteInfo));
     }
     if (can("admin") || usersSupported()) content.push(invitePanel());
+    // A Safari tab on iPhone or iPad moves to the Home Screen app (1.12.0).
+    content.push(movePanel());
     // On the home network only: the controller refuses it through the account.
     if (can("admin") && !ui.homeInvitation && !ui.inviteForm && state.status === "connected" && state.transport === "lan") content.push(...secretPanel());
   } else if (IS_IOS) {

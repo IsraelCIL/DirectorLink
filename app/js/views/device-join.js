@@ -10,8 +10,9 @@
 // device (../device-join.js). The new device opens it and joins with it as with a link. The account
 // service passes the keys and the sealed invitation on, and cannot open it.
 //
-// Paste invitation link (the Connect screen and Settings → Account) reads a link from the
-// clipboard, or from a field where the clipboard cannot be read, and opens the join page with it.
+// Join with an invitation (the Connect screen and Settings → Account; Paste invitation link before
+// 1.12.0) takes a link that opened elsewhere, iOS's Safari above all: Paste reads it from the
+// clipboard after a tap, or it is typed or pasted in the field, and the join page opens with it.
 
 import { loadAccount } from "../account.js";
 import { checkCode, codeText, commitmentOf, invitationFromText, keyPair, openInvitation, sealInvitation } from "../device-join.js";
@@ -98,16 +99,9 @@ function offered() {
 }
 
 // The device's own words for itself, which the other device shows: "Safari on iPhone", or for
-// the app added to the Home Screen (whose browser does not say its name) "Home Screen app on iPhone".
+// the app added to the Home Screen "DirectorLink app on iPhone" (clientName, since 1.12.0).
 export function deviceLabel() {
-  let installed = false;
-  try {
-    installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-  } catch {
-    installed = false;
-  }
-  const name = clientName();
-  return (installed ? name.replace(/^Browser on /, "Home Screen app on ") : name).slice(0, 48);
+  return clientName().slice(0, 48);
 }
 
 function go(hash) {
@@ -459,12 +453,15 @@ function mine(item) {
 // for this person's other device (`forSelf`: 10 minutes, and the new key joins this device's
 // person). The controller registers it itself (1.0.0 and later); for an older one the home's owner
 // does, from here. One the account did not take is revoked at home too. Settings' Add my other
-// device and Invite someone, and Approve here.
-export async function makeInvitation({ forSelf, email, role, access, profileId }) {
+// device, Add a user's Send a link and Move to the Home Screen app (1.12.0: `name`, the new user's,
+// and `move`, ADR-083), and Approve here.
+export async function makeInvitation({ forSelf, email, role, access, profileId, name, move }) {
   // Just under 7 days: the account refuses invitations longer than that.
   // For my other device, the new key joins my profile (drivers with profiles, 0.12.0 and later).
   const body = { role, expires_in: forSelf ? 600 : 7 * 24 * 3600 - 300 };
   if (forSelf && state.profile) body.for_me = true;
+  if (forSelf && move) body.move = true;
+  if (!forSelf && !profileId && name) body.name = name;
   // What the invited member may see and do (1.8.0, ADR-054).
   if (access) body.access = access;
   // Another device of an existing user (1.9.0, ADR-061: an admin invites their account).
@@ -858,8 +855,9 @@ function useText(text) {
   return true;
 }
 
-// The clipboard first: iOS shows its Paste button, other browsers may ask. Where it cannot be read
-// (refused, or a browser without it), or holds no link, a field takes it.
+// Paste: the clipboard, read only after this tap (iOS shows its own Paste button, other browsers
+// may ask). Where it cannot be read (refused, or a browser without it), or holds no link, the field
+// takes it.
 async function pasteFromClipboard(key) {
   let text = null;
   try {
@@ -869,22 +867,37 @@ async function pasteFromClipboard(key) {
   }
   if (useText(text)) return;
   paste.open = key;
-  paste.message = text && text.trim() ? t("deviceJoin.paste.notALink") : null;
+  paste.message = text && text.trim() ? t("deviceJoin.paste.notALink") : t("deviceJoin.paste.typeIt");
   notify();
   window.requestAnimationFrame(() => document.querySelector(`[data-key="${key}-paste-text"]`)?.focus());
 }
 
-// `key`: where it is (connect, account), so that the field comes back where it was opened.
+function openPanel(key) {
+  paste.open = key;
+  paste.message = null;
+  notify();
+}
+
+// `key`: where it is (connect, account), so that the field comes back where it was opened. Join
+// with an invitation opens the panel: Paste, and the field.
 export function pasteInvitationPanel({ key }) {
+  if (paste.open !== key) {
+    return h(
+      "div",
+      { class: "paste-invitation" },
+      h(
+        "div",
+        { class: "button-row" },
+        h("button", { type: "button", class: "button button-secondary", dataset: { key: `${key}-paste` }, onclick: () => openPanel(key) }, icon("key"), t("deviceJoin.paste.button"))
+      )
+    );
+  }
   const button = h(
     "button",
-    { type: "button", class: "button button-secondary", dataset: { key: `${key}-paste` }, onclick: () => pasteFromClipboard(key) },
+    { type: "button", class: "button button-primary", dataset: { key: `${key}-paste-clipboard` }, onclick: () => pasteFromClipboard(key) },
     icon("copy"),
-    t("deviceJoin.paste.button")
+    t("deviceJoin.paste.paste")
   );
-  if (paste.open !== key) {
-    return h("div", { class: "paste-invitation" }, h("div", { class: "button-row" }, button));
-  }
   const field = h("input", {
     id: `${key}-paste-text`,
     type: "text",
@@ -906,6 +919,7 @@ export function pasteInvitationPanel({ key }) {
     {
       class: "paste-invitation",
       novalidate: true,
+      dataset: { key: `${key}-paste-panel` },
       onsubmit: (event) => {
         event.preventDefault();
         if (useText(paste.text)) return;
@@ -913,6 +927,9 @@ export function pasteInvitationPanel({ key }) {
         notify();
       },
     },
+    h("h3", { class: "settings-subtitle" }, t("deviceJoin.paste.button")),
+    h("p", { class: "field-help" }, t("deviceJoin.paste.intro")),
+    h("div", { class: "button-row" }, button),
     h("label", { class: "field-label", for: `${key}-paste-text` }, t("deviceJoin.paste.label")),
     field,
     h("p", { class: "field-help", id: `${key}-paste-help` }, t("deviceJoin.paste.help")),
@@ -920,7 +937,7 @@ export function pasteInvitationPanel({ key }) {
     h(
       "div",
       { class: "button-row" },
-      h("button", { type: "submit", class: "button button-primary", dataset: { key: `${key}-paste-join` } }, t("deviceJoin.paste.join")),
+      h("button", { type: "submit", class: "button button-secondary", dataset: { key: `${key}-paste-join` } }, t("deviceJoin.paste.join")),
       h(
         "button",
         {

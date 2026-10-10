@@ -2,7 +2,7 @@
 // part on the Connect screen, a device that reaches the home seeing the request, both showing the
 // same code, Approve making a for-me invitation at the controller (as Add my other device does) and
 // sealing it, and the new device joining with it; Decline; an account service before 1.7.0; and
-// Paste invitation link with and without the clipboard. The approving device types the code the new
+// Join with an invitation (Paste invitation link before 1.12.0) with and without the clipboard. The approving device types the code the new
 // device shows (a wrong one approves nothing; three decline the request), asks only once its role is
 // known, looks for requests every 60 s, and keeps the invitation when Approve's answer is lost but
 // the cloud took it; a key saved another way withdraws the request. Both devices run in this one page, against
@@ -251,13 +251,6 @@ function byKey(node, key) {
   });
   return found;
 }
-function byKeyStart(node, prefix) {
-  let found = null;
-  walk(node, (item) => {
-    if (!found && item.dataset?.key?.startsWith(prefix)) found = item;
-  });
-  return found;
-}
 // The element when it can be pressed: not disabled (the approving device disables its buttons
 // while one of its actions finishes, and ignores a press then).
 const enabled = (element) => (element && !("disabled" in element.attributes) ? element : null);
@@ -379,7 +372,7 @@ test("the new device asks and shows a code, the other types it, Approve seals a 
   click(byKey(joinFromAnotherDevice(), "device-join-start"));
   await until(() => cloud.requests.size === 1, "the request");
   const [request] = [...cloud.requests.values()];
-  assert.equal(request.label, "Home Screen app on iPhone");
+  assert.equal(request.label, "DirectorLink app on iPhone");
   assert.match(request.commitment, /^[0-9a-f]{64}$/);
   const waiting = joinFromAnotherDevice();
   assert.match(waiting.textContent, /Open DirectorLink on a device you already use, signed in as dana@example\.com/);
@@ -388,7 +381,7 @@ test("the new device asks and shows a code, the other types it, Approve seals a 
   // The device that reaches the home sees it at its next look (every 60 s while it is shown).
   approverDevice();
   await untilTicking(60000, () => deviceRequestNotice(), "the request on the other device");
-  assert.match(deviceRequestNotice().textContent, /Home Screen app on iPhone wants to join your home/);
+  assert.match(deviceRequestNotice().textContent, /DirectorLink app on iPhone wants to join your home/);
   assert.match(deviceRequestNotice().textContent, /Didn’t ask\? Decline it and sign out everywhere in Settings → Account\./);
   click(byKey(deviceRequestNotice(), `device-request-show-${request.id}`));
   await until(() => request.approver_key, "the other device's key");
@@ -400,7 +393,7 @@ test("the new device asks and shows a code, the other types it, Approve seals a 
   const onNew = byKey(joinFromAnotherDevice(), "device-join-code").textContent;
   assert.match(onNew, /^[0-9]{3} [0-9]{3}$/);
   assert.match(joinFromAnotherDevice().textContent, /Type this code on your other device/);
-  assert.match(deviceRequestNotice().textContent, /Type the code that Home Screen app on iPhone shows/);
+  assert.match(deviceRequestNotice().textContent, /Type the code that DirectorLink app on iPhone shows/);
   assert.ok(!deviceRequestNotice().textContent.includes(onNew), "the approving device never shows the code itself");
 
   // The code typed (as shown, with its space), then Approve: a for-me invitation at the controller,
@@ -640,22 +633,29 @@ test("an account with no device that could approve is told what to do instead", 
   cloud.refuseStart = null;
 });
 
-test("Paste invitation link: from the clipboard, else from a field", async () => {
+test("Join with an invitation: Paste from the clipboard after a tap, else the field", async () => {
   const token = `${HOME}.89abcdef.${"cd".repeat(32)}`;
   const opened = () => sessionStorage.getItem("directorlink.join");
-  // The clipboard holds a whole link: the join page opens with it.
+  // Join with an invitation opens the panel: Paste and the field; nothing is read before Paste.
   clipboard.text = `Join my home: https://app.directorlink.io/#/join/${token}`;
   window.location.hash = "#/";
+  const reads = clipboard.read;
+  assert.equal(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste").textContent, "Join with an invitation");
   click(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste"));
+  assert.ok(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-text"), "the field at once");
+  assert.equal(clipboard.read, reads, "the clipboard is read only after Paste");
+  // The clipboard holds a whole link: the join page opens with it.
+  click(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-clipboard"));
   await until(() => opened() === token, "the invitation kept");
   assert.equal(window.location.hash, "#/join");
-  assert.equal(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-text"), null, "no field needed");
+  assert.equal(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-text"), null, "the panel closes");
   sessionStorage.removeItem("directorlink.join");
 
-  // Refused (or a browser without it): a field, without an error.
+  // Refused (or a browser without it): the field, and why.
   clipboard.refuse = true;
   click(byKey(pasteInvitationPanel({ key: "account" }), "account-paste"));
-  await until(() => byKey(pasteInvitationPanel({ key: "account" }), "account-paste-text"), "the field");
+  click(byKey(pasteInvitationPanel({ key: "account" }), "account-paste-clipboard"));
+  await until(() => /Couldn’t read the clipboard/.test(pasteInvitationPanel({ key: "account" }).textContent), "the reason");
   const form = pasteInvitationPanel({ key: "account" });
   assert.doesNotMatch(form.textContent, /isn’t an invitation link/);
   assert.equal(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-text"), null, "only where it was asked for");
@@ -675,6 +675,7 @@ test("Paste invitation link: from the clipboard, else from a field", async () =>
   clipboard.refuse = false;
   clipboard.text = "1234 5678";
   click(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste"));
+  click(byKey(pasteInvitationPanel({ key: "connect" }), "connect-paste-clipboard"));
   await until(() => /isn’t an invitation link/.test(pasteInvitationPanel({ key: "connect" }).textContent), "the reason");
   assert.equal(opened(), null);
 
@@ -682,17 +683,20 @@ test("Paste invitation link: from the clipboard, else from a field", async () =>
   const reader = navigator.clipboard;
   navigator.clipboard = undefined;
   const before = clipboard.read;
-  click(byKeyStart(pasteInvitationPanel({ key: "account" }), "account-paste"));
+  click(byKey(pasteInvitationPanel({ key: "account" }), "account-paste"));
+  click(byKey(pasteInvitationPanel({ key: "account" }), "account-paste-clipboard"));
   await until(() => byKey(pasteInvitationPanel({ key: "account" }), "account-paste-text"), "the field");
   assert.equal(clipboard.read, before);
   navigator.clipboard = reader;
 
-  // The join page shows the pasted invitation as it would a link's.
+  // The join page in the Home Screen app shows the pasted invitation as it would a link's.
+  standalone = true;
   sessionStorage.setItem("directorlink.join", token);
   state.account = { status: "signed-in", user: { email: EMAIL }, notice: null, busy: false };
   ui.joinWait = null;
   const page = joinView({ navigate: () => {} });
   assert.ok(byKey(page[1], "join-accept"), "Accept invitation");
+  standalone = false;
 });
 
 // The users review of 1.9.0 (finding 11): approving a device for a user who has five already shows

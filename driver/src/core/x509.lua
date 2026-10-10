@@ -1,7 +1,7 @@
--- The little of X.509 that Direct HTTPS reads (1.12.0 test build, ADR-082), in plain Lua: PEM
--- blocks, and from a certificate or a certificate request (CSR) its public key, its names, its
--- issuer's name and when it expires. Nothing here checks a signature: a certificate is only kept
--- when its public key is the controller's own (src/api/https.lua), and browsers check the rest.
+-- The little of X.509 that Direct HTTPS reads (1.12.0, ADR-082), in plain Lua: PEM blocks, and from
+-- a certificate or a certificate request (CSR) its public key, its names, its issuer's name and when
+-- it is valid. Nothing here checks a signature: a certificate is only kept when its public key is
+-- the controller's own (src/api/direct_https.lua), and browsers check the rest.
 
 local Base64 = require("src.core.base64")
 local Clock = require("src.core.clock")
@@ -195,8 +195,8 @@ local function dnsNames(data, extensions)
     return names
 end
 
--- A certificate (DER): { public_key, spki, curve, algorithm, issuer_cn, subject_cn, not_after,
--- not_after_s, dns_names }, or nil and why not.
+-- A certificate (DER): { public_key, spki, curve, algorithm, issuer_cn, subject_cn, not_before,
+-- not_before_s, not_after, not_after_s, dns_names }, or nil and why not.
 function X509.readCertificate(der)
     if type(der) ~= "string" then
         return nil, "not a certificate"
@@ -225,11 +225,12 @@ function X509.readCertificate(der)
         return nil, "the certificate's public key could not be read"
     end
     local times = children(der, validity)
-    local notAfter, notAfterSeconds
+    local notBefore, notBeforeSeconds, notAfter, notAfterSeconds
     if times and #times == 2 then
+        notBefore, notBeforeSeconds = time(der, times[1])
         notAfter, notAfterSeconds = time(der, times[2])
     end
-    if not notAfter then
+    if not notAfter or not notBefore then
         return nil, "the certificate's validity could not be read"
     end
     local names = {}
@@ -240,6 +241,8 @@ function X509.readCertificate(der)
     end
     key.issuer_cn = commonName(der, issuer)
     key.subject_cn = commonName(der, subject)
+    key.not_before = notBefore
+    key.not_before_s = notBeforeSeconds
     key.not_after = notAfter
     key.not_after_s = notAfterSeconds
     key.dns_names = names

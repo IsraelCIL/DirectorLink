@@ -1531,6 +1531,10 @@ function Mock.install(project)
         if mock.tlsFails then
             return false, mock.tlsFails
         end
+        -- mock.tlsRefuses: certificate (PEM) -> what Director says when it cannot start with it.
+        if mock.tlsRefuses and mock.tlsRefuses[certificate] then
+            return false, mock.tlsRefuses[certificate]
+        end
         mock.tlsServers[port] = server
         return true
     end
@@ -1553,6 +1557,15 @@ function Mock.install(project)
         local privateKey = X509Fake.privateKey(seed)
         mock.privateKeys[#mock.privateKeys + 1] = privateKey
         return csr, X509Fake.pem(X509Fake.spki(point), "PUBLIC KEY"), privateKey
+    end
+
+    -- The controller's LAN address (Direct HTTPS tells the Worker it for the name's A record):
+    -- mock.controllerAddress, a test changes it as DHCP would; false: Director gives nothing.
+    function C4:GetControllerNetworkAddress()
+        if mock.controllerAddress == false then
+            return nil
+        end
+        return mock.controllerAddress or "192.168.1.10"
     end
 
     function C4:DestroyServer(port)

@@ -337,8 +337,9 @@ export class HomeAlerts {
     this.relay = relay;
   }
 
+  // The object's storage, whose alarm is the alerts' share of the object's one (alarms.js, 1.12.0).
   get storage() {
-    return this.relay.ctx.storage;
+    return this.relay.alertStorage ?? this.relay.ctx.storage;
   }
 
   get env() {

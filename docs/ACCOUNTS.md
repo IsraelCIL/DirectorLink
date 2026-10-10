@@ -68,6 +68,10 @@ device's key since 1.7.0, ADR-050) are in *6. Alerts* below.
 | An alert sent again after a lost connection (1.10.1, ADR-073) | — | a random id per alert, kept 10 minutes (at most 200) so that it pushes each once, and whether an alert came again (that a connection ended while it was on its way: it saw each connection end already); never more of what it is about | its own sealed alerts not yet answered, in memory for up to 2 minutes |
 | Scene links (1.7.0): a link's id and secret | shown once, when an admin makes it; then only on the phones and tags it was given to | **its id and secret in transit, each time a phone uses it**, with the home, when, and whether it ran, partly ran, failed or found nothing to run; it keeps no secret, and logs each run (the home, the link's id, the status, the result word, how long) in Workers Logs for some days; which scene it runs, **never** | the link's id, a hash of its secret, its scene and the key that made it; every run in History |
 | Ask-before-opening links (1.8.0): a door's link that asks its person | shown once, when its person makes it; the question opened with the device's alert key | as a scene link's run: **its id and secret in transit**, when, and the result word (asked, waiting, nobody, doors_off, not_asked), so that it is an ask link; then a brief sealed `notify` for its person's key ids, so which keys a link asks; which door, and the question, **never** | the link's id, a hash of its secret, its door and the key that made it; every question and the opening that answered it in History |
+| Direct HTTPS (1.12.0, ADR-082): the home's own name (`<20 random letters and digits>.dlhome.cc`) | its home's, in `GET /v1/system` while it listens, and admins in `GET /v1/https` | yes, from the first certificate the controller asks for: bound to the home in D1 for good (`https_names`), with when its first certificate was issued; **and it is public**: Certificate Transparency logs list every certificate issued for it, with their dates, and anyone may look up its DNS record | yes |
+| Direct HTTPS: the controller's LAN address (a private IPv4 address such as 192.168.1.201) | — | yes, while Direct HTTPS is on: the controller sends it with each request and when it changes, and the Worker writes it as the name's public DNS record (DNS only), deleted when it is turned off. Anyone who knows the name can read it: a private address, which says nothing outside the home | yes |
+| Direct HTTPS: the certificate and its key | the certificate, as any browser that connects | the certificates (public anyway) and its ACME account's key; the controller's CSR in transit; **never** the controller's private key | the key (in its store, never sent, logged or backed up) and the certificate |
+| Requests on port 28443 at home (Direct HTTPS) | yes | **never**: they go from the device to the controller on the home network | yes |
 | When, and how much data, flows | yes | yes | yes |
 
 A stolen or hacked cloud database gives an attacker email addresses and which account belongs to
@@ -659,6 +663,11 @@ Cloudflare D1 (SQLite), next to the relay's Durable Objects:
   ids have none left (`alerts_gone`, ADR-062). The home's Durable Object keeps the admin key ids
   the controller last listed, and when it last notified (60 an hour at most).
 - `stats` (1.7.0, ADR-052, `migrations/0010`): three totals and when each was last counted (below).
+- `https_names` (1.12.0, ADR-082, `migrations/0011`): each home's Direct HTTPS name, which home it
+  belongs to (for good, so that no other home can ask for it), when it was first asked for and when
+  its first certificate was issued. The home's Durable Object keeps the controller's LAN address
+  while Direct HTTPS is on, the name's certificates (public anyway), when it last ordered one (the
+  last week's, for the limits) and the ACME account's URL; Cloudflare's DNS has the name's A record.
 - No device data, no keys and no message contents. The hash of each home's connection secret is
   in the relay's Durable Object storage.
 
@@ -692,7 +701,7 @@ The website asks for them from the visitor's browser, without cookies.
 
 In `docs/RELAY.md`: `e2e`, `join` and `claim` from the relay, answered with `e2e`, `join_result` and
 `claim_result`; `invitation` (answered `invitation_result`) and `invitation_cancel` from the
-controller (1.0.0); `backup_chunk` (answered `backup_result`) from the controller (1.6.0). Version 0's plain requests are refused (410
+controller (1.0.0); `backup_chunk` (answered `backup_result`) from the controller (1.6.0); `https_certificate` and `https` (answered `https_certificate_result` and `https_result`) from the controller, for Direct HTTPS (1.12.0, ADR-082). Version 0's plain requests are refused (410
 `RELAY_REQUESTS_RETIRED`) and its test endpoints are off in production. Roles come from the
 device's key.
 
@@ -778,7 +787,13 @@ device's key.
 ## iPhone and iPad
 
 They cannot use the home-network connection: WebKit blocks it (see the README). With this design
-they always go through the cloud, locked, even at home. The owner still has to claim the home once
+they always go through the cloud, locked, even at home, unless the home has **Direct HTTPS** (1.12.0,
+ADR-082): the installer allows it in Composer and the owner turns it on, and the controller then
+serves the same API over HTTPS on port 28443 under the home's own name, with a Let's Encrypt
+certificate the cloud gets for it. Requests there go straight to the controller and are sealed as on
+the home network; the cloud learns the name and the controller's LAN address (*Who knows what*). A
+router with DNS rebinding protection hides that name's private address: the app then stays on the
+cloud, until `dlhome.cc` is allowed in the router. The owner still has to claim the home once
 from a computer or an Android phone; the owner's iPhone then joins as *my other device*, or (1.7.0)
 with **Join from another device**, which the Home Screen app needs: it gets no links (*Join from
 another device*, above).

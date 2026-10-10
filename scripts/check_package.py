@@ -31,8 +31,8 @@ REQUIRED_PROPERTIES = (
     "Alarm Status",
     "Remote Access",
     "Remote Status",
-    # The API over HTTPS on port 28443 under the home's own name (1.12.0 test build, ADR-082): the
-    # installer's switch, and its name and state.
+    # The API over HTTPS on port 28443 under the home's own name (1.12.0, ADR-082): the installer's
+    # switch, and its name and state.
     "Direct HTTPS",
     "Direct HTTPS Status",
     # What DirectorLink automates, visible to the installer (0.15.0): a pause switch, a summary
@@ -73,7 +73,7 @@ SECURITY_CONTRACT = {
         # The home's own name passes the Host check only on the Direct HTTPS server (ADR-082).
         "return client ~= nil and client.secure == true and services.https ~= nil and services.https.hostAllowed(host) == true",
     ),
-    # Direct HTTPS (1.12.0 test build, ADR-082): TLS 1.2 and 1.3, no client certificate asked for,
+    # Direct HTTPS (1.12.0, ADR-082): TLS 1.2 and 1.3, no client certificate asked for,
     # exactly the home's name, and only its own server destroyed (DestroyServer() would end 41999's).
     "src/api/direct_https.lua": (
         "DirectHttps.TLS_OPTIONS = 0",

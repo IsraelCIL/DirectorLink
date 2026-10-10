@@ -1,6 +1,7 @@
 // Cloudflare Worker + Durable Object: the DirectorLink relay on https://api.directorlink.io.
 // Protocol: docs/RELAY.md. One Durable Object per home (HomeRelay, SQLite-backed, named by
 // home_id) holds the driver's WebSocket. Deployed by hand for now (see README.md):
+//   npx wrangler@4.143.0 d1 migrations apply directorlink --remote   (first; 1.12.0: 0011_https_names)
 //   npx wrangler@4.143.0 deploy
 //   npx wrangler@4.143.0 secret put TEST_TOKEN      (the version 0 test endpoints)
 // `wrangler dev` reads TEST_TOKEN, and optionally REQUEST_TIMEOUT_MS, from cloud/.dev.vars.
@@ -38,6 +39,12 @@
   // MIN_DRIVER_VERSION (ADR-059), not set: every DirectorLink connects. Set it ("1.8.0") only when a
   // flaw in the remote protocol needs drivers with the fix; older ones are refused until updated.
   // Set it here and deploy, not in the dashboard: a deploy replaces the dashboard's vars with these.
+  // Direct HTTPS (1.12.0, ADR-082, src/https.js): DLHOME_ZONE_ID is the zone of dlhome.cc (not a
+  // secret), ACME_DIRECTORY Let's Encrypt's directory (its staging one,
+  // https://acme-staging-v02.api.letsencrypt.org/directory, to try it). Two secrets go with them:
+  // DLHOME_DNS_TOKEN (a Cloudflare API token that may edit DNS of dlhome.cc only) and
+  // ACME_ACCOUNT_KEY (the ACME account's key, PKCS #8 PEM, P-256), set with `secret put`
+  // (README.md); without them the controllers are answered HTTPS_UNAVAILABLE.
   "vars": {
     "VAPID_PUBLIC_KEY": "BMvqqdAc8jZJwC-v7ZrwEeuMDZaPEaIt-sl4DFOykkz1ZBq7EY1xx8HBP0_NlDYT67Z1eADNnBFatwdjASvuH6w",
     "GOOGLE_CLIENT_ID": "1034749624411-vfj1im8dc42utkvl6lfiv3hs49mcna2s.apps.googleusercontent.com",
@@ -47,7 +54,9 @@
     "APPLE_APP_ID": "io.directorlink.app",
     "APP_ORIGINS": "https://app.directorlink.io",
     "SITE_ORIGINS": "https://directorlink.io,https://www.directorlink.io",
-    "PUBLIC_URL": "https://api.directorlink.io"
+    "PUBLIC_URL": "https://api.directorlink.io",
+    "DLHOME_ZONE_ID": "38e18e06ad8a2a72c765f33d6abb3db2",
+    "ACME_DIRECTORY": "https://acme-v02.api.letsencrypt.org/directory"
   },
   // Daily housekeeping, and DirectorLink in numbers every hour (ADR-052): index.js tells them
   // apart by the expression, so "47 * * * *" must stay as written in src/stats.js (STATS_CRON).

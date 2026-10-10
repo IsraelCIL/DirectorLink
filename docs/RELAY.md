@@ -161,7 +161,7 @@ since 1.10.1 a `notify` with an `id`).
 | driver → relay | `ping` (plain text) | Keep-alive, every 5 s (10 s from 1.6.0, 25 s before), and if Director polls the connection. |
 | relay → driver | `pong` (plain text) | Answer to `ping`, sent by the runtime without waking the relay's code. |
 | driver → relay | `{"type":"hello","home":"<home_id>","version":"1.10.1","ping_s":5,"features":["scene_links","alerts_gone","users","resend","alert_acks"],"instance":"<32 hex>"}` | First message after connecting. `ping_s`: how often the driver pings, in seconds (since 1.6.0; without it the relay counts 25 s). `features` (since 1.7.0): what the relay may send this driver besides what every version takes; `scene_links`: `link` runs; `users` (1.9.0, ADR-061): `accounts`, and any device of an account may approve that account's new device (the controller lets every user add their own; the home's object keeps the last hello's features as `driver_features`). `alerts_gone` (since 1.9.0): `alerts_gone`. `resend` (1.10.0, ADR-072): a request already sent when a connection ended may come again on the next one (*While the driver reconnects*, below). `alert_acks` (1.10.1, ADR-073): the driver gives each `notify` an `id`, keeps it until the relay answers `notify_result`, and sends it again after a lost connection to a relay that says it answers them (`relay_features`; *Alerts the driver sends*, below). A driver that does not list a feature is never sent its messages. `instance` (1.10.0): a random id the driver makes at each start, so that the relay sends a request again only to the start of the driver it went to. |
-| relay → driver | `{"type":"relay_features","id":"…","features":["alert_acks"]}` | What this relay does besides what every relay does (1.10.1, ADR-073): sent only to a driver whose `hello` lists `alert_acks`, at once, before anything else that `hello` lets the relay send (`accounts`, `alerts_gone`, requests sent again). `alert_acks`: it answers each `notify` that has an `id` with `notify_result`, and pushes an id once. No answer. A relay before 1.10.1 never sends it: the driver takes a relay heard without it (its `accounts` or `alerts_gone` first, or the second keep-alive tick after a `pong`) as one that does not answer alerts. |
+| relay → driver | `{"type":"relay_features","id":"…","features":["alert_acks","https"]}` | What this relay does besides what every relay does (1.10.1, ADR-073): sent only to a driver whose `hello` lists `alert_acks`, at once, before anything else that `hello` lets the relay send (`accounts`, `alerts_gone`, requests sent again). `alert_acks`: it answers each `notify` that has an `id` with `notify_result`, and pushes an id once. `https` (1.12.0, ADR-082): it answers `https_certificate` and `https` (*Direct HTTPS*, below), even when its own settings are missing (`HTTPS_UNAVAILABLE`). No answer. A relay before 1.10.1 never sends it: the driver takes a relay heard without it (its `accounts` or `alerts_gone` first, or the second keep-alive tick after a `pong`) as one that does not answer alerts, nor issue certificates. |
 | driver → relay | `{"type":"keys","ids":["<key id>", …]}` | The ids of the home's API keys (ids only), after `hello` and after every change. The cloud forgets the others; an account whose keys are all gone leaves the home (never its owner). Since 0.11.0. |
 | relay → driver | `{"type":"accounts","id":"…","keys":{"<key id>":["<16 hex>", …]}}` | Which of the home's keys share a Google or Apple account (1.9.0, ADR-061, `docs/ACCOUNTS.md` *Users and accounts*): for each key an account uses (`member_keys`), a tag per account, the first 16 hex digits of SHA-256(`DirectorLink account v1\|<home id>\|<account id>`), at most 4 a key, sorted; a key no account uses is left out. Never an account's id or email. Sent only to a driver whose `hello` lists `users`, after each `keys` message it sent (in the order of its frames), after an account's first sealed request with a key, and after a join, a member removed, a new owner, or an account deleted or left without a sign-in. It replaces what the driver knew; no answer. The driver suggests bringing an account's devices into one user, which an admin confirms; it never moves a device on this message. |
 | relay → driver | `{"type":"e2e","id":"…","envelope":{…}}` | A request sealed by a device (the lock, `docs/ACCOUNTS.md`). |
@@ -185,6 +185,10 @@ since 1.10.1 a `notify` with an `id`).
 | relay → driver | `{"type":"link","id":"…","link":"<8 hex>","secret":"<40 hex>"}` | A scene's link, run from a phone's automation (1.7.0, ADR-051, docs/SCENES.md): not sealed. Sent only to a driver whose `hello` lists `scene_links`, for a home an account has claimed, at most 30 a minute a home, and none from an address whose runs were answered 404 ten times in 10 minutes. The driver checks the secret against the hash it keeps, in constant time, and runs the scene as DirectorLink itself, which opens no door or gate (until 1.8.0: as a member's key would). |
 | driver → relay | `{"type":"link_result","id":"…","ok":true,"result":"ran"}` | How it went: `ran`, `partly` (some devices skipped or failed), `failed` (none ran) or `nothing` (there was nothing to run: its devices were removed in Composer); or `"ok":false` with `NOT_FOUND` (an unknown link, a wrong secret, a scene gone or with doors or gates, the key that made the link gone: all alike), `RATE_LIMITED` (6 runs a minute a link; `retry_s`) or `INTERNAL`. Never names the scene. Since 1.7.0. Since 1.8.0 the link may be a door's ask-to-open link (ADR-058), which opens nothing: `asked` (a `notify` went to its person's devices just before), `waiting`, `nobody`, `doors_off` or `not_asked`; `RATE_LIMITED` also after 10 runs an hour that asked or said why nobody was asked (`retry_s` then up to 3600, which the account service passes on as `Retry-After`). Never names the door. |
 | relay → driver | `{"type":"alerts_gone","id":"…","keys":["<key id>", …]}` | The key ids that no browser registered at the home can get alerts for any more (1.9.0, ADR-062), sent to a driver whose `hello` lists `alerts_gone`: after each `keys`, and when browsers are removed (also by a registration: the same browser registered again with another key, or an account's oldest beyond ten), those of its keys with none registered by an account that uses them; after a `notify`, those it named that had none, or whose every browser the push service no longer knew (404, 410); after any other push, those whose last browser went so. Key ids only, at most 200: the cloud knew which keys have browsers. The driver switches those keys' alerts off (as their app would: `on` false, their kinds kept), so that it seals nothing more to them and an ask-to-open link whose devices are all gone answers `nobody`; their app switches alerts on again at its next start if it still has them. No answer. Drivers before 1.9.0 are never sent it (and would ignore it). |
+| driver → relay | `{"type":"https_certificate","id":"…","name":"<20 base32>.dlhome.cc","csr":"-----BEGIN CERTIFICATE REQUEST-----…","ip":"192.168.1.201"}` | Direct HTTPS (1.12.0, ADR-082): a certificate for the controller's CSR (PEM, the name as its CN only), and the name's A record at its LAN address. Sent only to a relay whose `relay_features` lists `https`, while the home's owner has it on. Answered `https_certificate_result`, at once and again later (*Direct HTTPS*, below). |
+| relay → driver | `{"type":"https_certificate_result","id":"…","ok":true,"status":"pending"}`, then `{"type":"https_certificate_result","id":"…","ok":true,"status":"issued","name":"…","certificate":"<PEM>","chain":"<PEM>","not_after":"<ISO time>"}` | `pending`: the order is running; its result follows tens of seconds later, to the id of the driver's newest request for that key. `issued` at once when the home has a fresh certificate for that key (more than a third of its lifetime left). Or `"ok":false` with a `code` (and `retry_s` when the Worker knows how long to wait; *Direct HTTPS*, below). |
+| driver → relay | `{"type":"https","id":"…","name":"…","ip":"192.168.1.77"}`, or `{"type":"https","id":"…","name":null}` | Direct HTTPS (1.12.0): the controller's address, after each `relay_features` and when it changes (the A record follows while the home has a certificate); `name` null: turned off, the A record (and any challenge's TXT record) goes. Answered `https_result`. |
+| relay → driver | `{"type":"https_result","id":"…","ok":true}` | Done; or `"ok":false` with `HTTPS_UNAVAILABLE`, `INVALID_REQUEST`, `ADDRESS_NEEDED`, `NOT_CLAIMED`, `NAME_MISMATCH` (with `name`), `NAME_TAKEN`, `DNS_FAILED` or `INTERNAL`. The driver tells the address again at its next look (10 minutes) or connection, and asks for the record's deletion again at every connection until it is answered `ok`. |
 | relay → driver | the same `e2e`, `join`, `claim` or `link` message again, with `"resent":1` (or `2`) | A request already sent when the driver's connection ended, unanswered (1.10.0, ADR-072): the same id and the same body, on the next connection, right after its `hello`, only to a driver whose `hello` lists `resend` and names the same `instance`. The driver runs each id once: a repeat gets the first answer again, byte for byte; one still running gets nothing then (its answer goes on the connection there is when it is done); one it never got runs. |
 | driver → relay | `{"type":"e2e","id":"…","ok":false,"code":"ANSWER_NOT_KEPT"}` (or `join_result`, `claim_result`, `link_result`) | That request ran, but its answer is no longer kept (too large to keep, such as a picture, or let go to stay within the driver's budget): the relay answers `502 HOME_DISCONNECTED`, as when a connection ended before 1.10.0. Also for a request sent again that the driver may have run and forgotten (more than 512 requests in 2 minutes, one of those forgotten within the last 30 s); the relay's log then says the home *may have* carried it out. Since 1.10.0. |
 | relay → driver | `{"type":"request",…}` | Version 0. Refused: `{"type":"response","id":"…","status":410,…}` with `code` `RELAY_REQUESTS_RETIRED`; nothing reaches the API. Never sent again. |
@@ -451,6 +455,77 @@ longer than the alert's minute or two, and beyond 20 waiting. The driver's own q
 above show which side ended the connection. If `heard_s` was under one ping interval (5 s; 10 s
 before 1.10.0, 25 s before 1.6.0) and the relay saw 1006, the connection was cut between the two:
 by the home's network, the internet provider or Cloudflare's edge.
+
+## Direct HTTPS (1.12.0, ADR-082)
+
+At home, iPhones and iPads cannot call the controller's plain-HTTP API from the app's HTTPS page, so
+the controller can also serve it over TLS on port 28443, under a name of the home's own
+(`<20 base32>.dlhome.cc`), with a Let's Encrypt certificate that the relay gets for it. The installer
+allows it in Composer (`Direct HTTPS`: Allowed), the home's owner turns it on in the app
+(`PUT /v1/https`), and it needs Remote Access and a home linked to an account.
+
+**The controller** (`driver/src/api/direct_https.lua`) makes its name and a P-256 key once, with its
+CSR (`C4:GenerateCSR_ECC("SHA256", "prime256v1", "/CN=<name>")`, no subjectAltName). Once the relay
+says it issues certificates (`relay_features` lists `https`), it asks for one when it has none, or
+less than a third of its lifetime is left: `https_certificate` with the name, the CSR and its LAN
+address (`C4:GetControllerNetworkAddress`, private IPv4 only). Its key never leaves it.
+
+- `pending` (the order runs; the result comes to the newest request's id, tens of seconds later)
+  waits up to 15 minutes; any other first answer within a minute. A request whose connection ended
+  is asked again on the next connection: the relay answers it from what it kept, never a second
+  order.
+- `issued`: the controller keeps the certificate only when its public key is the controller's own,
+  its DNS names cover the name, it is valid now and an issuer comes with it (an `issued` answer is
+  taken whichever request id it carries: the certificate itself says whether it is the controller's).
+  Then the TLS server starts with it, the old one destroyed by its port first; when the new one
+  cannot start a server, the old one serves again while it is valid (asked again after the backoff).
+- A refusal (`ok` false) or no answer: asked again after 5 minutes, 15, an hour, 6 hours, then once a
+  day, or after `retry_s` when it is longer (at most a week). `NAME_MISMATCH` gives the home's own
+  name (`name`): the controller takes it, with a new key, and asks at once; `NAME_TAKEN`: a new name,
+  at once; `INVALID_CSR`: a new key, after the wait. At most three new names or keys a start.
+- Every 10 minutes it looks at the certificate's age and its address. After each `relay_features`,
+  and when its address changed, it sends `https` with its address (unless it is asking for a
+  certificate, which carries it). A certificate that expired is forgotten and the TLS server stops.
+- Turned off (the owner, or Composer back to Off): the TLS server stops, the certificate is
+  forgotten, and `https` with `name` null asks for the A record's deletion, at once or at the next
+  connection; the controller keeps asking (the store remembers it over a restart) until it is
+  answered `ok`. Reset Remote Identity sends it on the old connection and forgets the name.
+
+**The relay** (`cloud/src/https.js`, `acme.js`, `x509.js`, the home's Durable Object):
+
+| Code | When |
+| --- | --- |
+| `HTTPS_UNAVAILABLE` | the Worker has no `DLHOME_DNS_TOKEN`, `ACME_ACCOUNT_KEY` or `DLHOME_ZONE_ID`: nothing else is done |
+| `INVALID_REQUEST` | no `id`, a name that is not `^[a-z2-7]{20}\.dlhome\.cc$`, a CSR that is not text of at most 8,192 characters |
+| `ADDRESS_NEEDED` | `ip` is not a private IPv4 address (10/8, 172.16/12, 192.168/16) |
+| `INVALID_CSR` | not one PEM certificate request; it names anything but exactly the name (its CN and DNS names together; any other kind of name); its key is not P-256 or RSA of 2048 bits or more. Also when Let's Encrypt refuses it (`badCSR`) |
+| `NOT_CLAIMED` | no account has claimed the home |
+| `NAME_MISMATCH` | the home's name is another one, given in `name` |
+| `NAME_TAKEN` | another home has this name |
+| `RATE_LIMITED` | the home's 3 new orders a day or 5 a week (`retry_s` until one is older), 45 new names a week in all (`retry_s` 6 hours), or Let's Encrypt's own limit (its Retry-After) |
+| `ACME_FAILED` | Let's Encrypt refused or failed: the challenge was not seen, the order was invalid, a step failed five times, or the order took longer than 10 minutes |
+| `DNS_FAILED` | Cloudflare's API refused or failed five times |
+| `INTERNAL` | anything else |
+
+- **One name a home.** The first request the relay accepts for a claimed home binds its name to the
+  home in D1 (`https_names`): names are public in Certificate Transparency logs, so no other home may
+  ask for one. The object keeps a copy.
+- **The order** runs in steps from the object's alarm, which it shares with the alerts
+  (`alarms.js`): a new order (the ACME account is registered with `ACME_ACCOUNT_KEY` at its first use,
+  and its URL kept), the dns-01 challenge's TXT record `_acme-challenge.<name>` (TTL 60), 20 s, the
+  challenge answered, its authorization polled, the finalize with the controller's CSR, the order
+  polled, the certificate downloaded. Then the TXT record goes, the certificate is kept (its text,
+  chain, dates, issuer and its key's SHA-256), the A record `<name>` → the address is written (DNS
+  only, TTL 3600), and the driver is sent `https_certificate_result` if it is connected (otherwise it
+  asks again and is answered from what is kept). A step that fails for a moment (the network, a 5xx,
+  a bad nonce, Cloudflare's 429) is tried again after 5 s, 15 s, 30 s and 60 s.
+- **The address.** `https` writes the A record only while the home has a certificate that has not
+  expired, and only when the address differs from what it last wrote, so a connection costs no call
+  to Cloudflare. `name` null deletes the name's A and TXT records and the order in progress.
+- **Logs:** `https_certificate_requested` (`renewal`), `https_certificate_issued` (`name`,
+  `not_after`), `https_certificate_failed` (`code`, the step and why), `https_dns_updated`,
+  `https_dns_deleted`, `https_refused` (`code`), `https_step_retried`; never a key, a CSR, a
+  certificate's text or an address.
 
 ## What a relayed request may do
 

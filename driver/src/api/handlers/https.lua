@@ -1,57 +1,37 @@
--- Direct HTTPS (1.12.0 test build, ADR-082; src/api/direct_https.lua), for admins: the status and
--- the certificate request, the certificate given back, and a new key.
+-- Direct HTTPS (1.12.0, ADR-082; src/api/direct_https.lua): its status for admins, and the home's
+-- owner's switch.
 
-local Json = require("src.core.json")
 local Problem = require("src.api.problem")
 local Validate = require("src.api.validate")
+local Access = require("src.auth.access")
 
 local Https = {}
 
-local function problem(refusal)
-    local extra
-    if refusal.field then
-        extra = { errors = Json.array({ { field = refusal.field, message = refusal.detail } }) }
-    end
-    return Problem.new(refusal.status, refusal.code, refusal.detail, extra)
-end
-
--- GET /v1/https (?csr=true: the CSR whatever the state).
+-- GET /v1/https.
 function Https.status(ctx)
-    local includeCsr, invalid = Validate.optionalBoolean(ctx.query.csr, "csr")
+    return 200, ctx.services.https.status()
+end
+
+-- PUT /v1/https {"enabled": true | false}: the home's owner only (ADR-064), once the installer has
+-- allowed it in Composer; on needs Remote Access and a home linked to an account. In the history.
+function Https.set(ctx)
+    local invalid = Validate.body(ctx.body, { enabled = true })
     if invalid then
         return invalid
     end
-    return 200, ctx.services.https.status(includeCsr == true)
-end
-
--- PUT /v1/https/certificate {certificate, chain}.
-function Https.set_certificate(ctx)
-    local invalid = Validate.body(ctx.body, { certificate = true, chain = true })
-    if invalid then
-        return invalid
+    if type(ctx.body.enabled) ~= "boolean" then
+        return Problem.invalidField("enabled", "enabled must be true or false")
     end
-    if type(ctx.body.certificate) ~= "string" then
-        return Problem.invalidField("certificate", "certificate must be PEM text")
+    local _, unknown = Access.owner()
+    if unknown then
+        return Problem.new(503, "UNAVAILABLE", "Who the home's owner is could not be read when DirectorLink started; restart the driver and try again")
     end
-    local chain = ctx.body.chain
-    if chain == Json.null then
-        chain = nil
+    if not Access.isOwner(ctx.apiKey) then
+        return Problem.new(403, "OWNER_ONLY", "Only the home's owner turns Direct HTTPS on or off")
     end
-    if chain ~= nil and type(chain) ~= "string" then
-        return Problem.invalidField("chain", "chain must be PEM text")
-    end
-    local status, refusal = ctx.services.https.installCertificate(ctx.body.certificate, chain, ctx.apiKey.id)
+    local status, refusal = ctx.services.https.setEnabled(ctx.body.enabled, ctx.apiKey)
     if not status then
-        return problem(refusal)
-    end
-    return 200, status
-end
-
--- POST /v1/https/new-key.
-function Https.new_key(ctx)
-    local status, refusal = ctx.services.https.newKey(ctx.apiKey.id)
-    if not status then
-        return problem(refusal)
+        return Problem.new(refusal.status, refusal.code, refusal.detail)
     end
     return 200, status
 end

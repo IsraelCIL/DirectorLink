@@ -23,10 +23,12 @@ import {
   homeZone,
   loadSchedules,
   loadWeather,
+  membersHaveNoSchedules,
   outside,
   outsideScale,
   sceneNameOf,
   scheduleIcon,
+  schedulesWanted,
   statusText,
   weatherNow,
   whenText,
@@ -76,8 +78,9 @@ function leave(hash, from) {
 // Entering Schedules or the editor: the scenes to pick from, the weather now and the Shabbat times,
 // and the weather every 5 minutes while it is open.
 export function enterSchedules() {
-  // Members never see schedules (1.8.0, ADR-054): nothing to load.
-  if (membersHaveNoSchedules()) return;
+  // Members never see schedules (1.8.0, ADR-054): nothing to load. Before this key's permissions
+  // are known nothing is loaded either: once connected, app.js enters again (keepWeatherFresh).
+  if (!schedulesWanted()) return;
   loadScenes();
   loadSchedules();
   loadWeather();
@@ -97,11 +100,6 @@ export function enterSchedules() {
 // After connecting on Schedules: the same, unless it runs already.
 export function keepWeatherFresh() {
   if (!weatherTimer) enterSchedules();
-}
-
-// With DirectorLink 1.8.0 schedules are the admins' (ADR-054): a member's app shows none.
-export function membersHaveNoSchedules() {
-  return state.system?.features?.people_permissions === true && !can("admin");
 }
 
 // Scenes | Schedules, at the top of both lists (Scenes alone for a member of a 1.8.0 home).
@@ -722,6 +720,8 @@ export function scheduleEditorView(key) {
   });
   const notReady = notReadyState();
   if (notReady) return [header, offlineBanner(), notReady];
+  // A member (a link kept from an admin's device): as on the list, never asked for, never loading.
+  if (membersHaveNoSchedules()) return [header, emptyState("clock", title, t("schedules.adminsOnly"))];
   const waiting = notLoaded(header);
   if (waiting) return waiting;
   if (state.schedulesUnsupported) return [header, emptyState("clock", title, t("schedules.updateDriver"))];

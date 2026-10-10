@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f5f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1012" media="(prefers-color-scheme: dark)" />
+    <meta
+      name="description"
+      content="DirectorLink · UniFi Protect for Control4: free, open-source drivers for UniFi Protect cameras and doorbells. Every camera added at once, live video, smart detections, doorbell rings and alerts with a snapshot. Local network, no cloud."
+    />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/site.css" />
+    <title>DirectorLink · UniFi Protect for Control4</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="header">
+      <a class="brand" href="/" aria-label="DirectorLink home">
+        <img src="/icons/icon.svg" alt="" width="36" height="36" />
+        <span>DirectorLink</span>
+      </a>
+      <nav aria-label="Links">
+        <ul class="nav">
+          <li><a href="/try/">Try it</a></li>
+          <li><a href="https://app.directorlink.io">App</a></li>
+          <li><a href="/drivers/" aria-current="page">Drivers</a></li>
+          <li><a href="https://console.directorlink.io">API console</a></li>
+          <li><a href="https://github.directorlink.io" rel="noreferrer">GitHub</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main id="main" tabindex="-1" class="drivers">
+      <section class="page-intro" aria-labelledby="driver-title">
+        <p class="crumbs"><a href="/drivers/">DirectorLink Drivers</a></p>
+        <h1 id="driver-title">DirectorLink · UniFi Protect <span>for Control4</span></h1>
+        <p class="lead">
+          Free, open-source Control4 drivers for UniFi Protect cameras and doorbells. Add the hub, paste an
+          API key, and every camera and doorbell on the console is in Control4, named as in UniFi Protect.
+          They talk straight to your console with Ubiquiti's official Protect Integration API: no cloud, no
+          extra hardware and no subscription.
+        </p>
+        <p class="pledge">Free. No subscription, no license key, no account with us.</p>
+        <div class="actions">
+          <a class="button button-primary" href="/drivers/unifi-protect/download">Download the drivers</a>
+          <a class="button button-secondary" href="/drivers/unifi-protect/releases" rel="noreferrer">Release notes and checksums</a>
+          <a class="button button-secondary" href="/drivers/unifi-protect/source" rel="noreferrer">Source and full guide</a>
+        </div>
+        <p class="note">
+          Made by DirectorLink, the open-source management layer for Control4 homes. Works on its own:
+          DirectorLink is not required.
+        </p>
+        <p class="note">
+          <strong>Field reports wanted.</strong> The drivers follow Ubiquiti's published API and pass their
+          tests against recorded answers from real consoles, but no installer has reported on them from a
+          real UniFi system yet. If you install them, please
+          <a href="/drivers/unifi-protect/issues" rel="noreferrer">send the log</a>.
+        </p>
+      </section>
+
+      <section class="driver-section" aria-labelledby="features-title">
+        <h2 id="features-title">What you get</h2>
+        <div class="table-wrap">
+          <table class="feature-table">
+            <thead>
+              <tr>
+                <th scope="col">Feature</th>
+                <th scope="col">Control4 app</th>
+                <th scope="col">Programming</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Every camera and doorbell</th>
+                <td>Nothing to do: they appear, named as in UniFi Protect</td>
+                <td>Hub action: Add New Cameras</td>
+              </tr>
+              <tr>
+                <th scope="row">Live video and pictures</th>
+                <td>The camera view, from the console's RTSP or RTSPS stream; camera tiles</td>
+                <td>Notification snapshots</td>
+              </tr>
+              <tr>
+                <th scope="row">Smart detections</th>
+                <td>–</td>
+                <td>Person, vehicle, animal, package, face, license plate, line crossing, zone, motion: events, variables, conditionals and contacts</td>
+              </tr>
+              <tr>
+                <th scope="row">Doorbell rings</th>
+                <td>Notifications with a snapshot (G4 Doorbell, G4 Doorbell Pro, G6 Entry)</td>
+                <td>Ring and Doorbell Ring events, last ring</td>
+              </tr>
+              <tr>
+                <th scope="row">Alerts for people</th>
+                <td>Notifications with a snapshot: any detection, people and vehicles, or people only</td>
+                <td>Alert and Camera Alert events, last alert</td>
+              </tr>
+              <tr>
+                <th scope="row">One alerts tile for the home</th>
+                <td>Tap to turn alerts on or off; shows an alert, off, snoozed or offline</td>
+                <td>Set Alerts, Snooze Alerts; Alerts On and Off events</td>
+              </tr>
+              <tr>
+                <th scope="row">Sounds</th>
+                <td>–</td>
+                <td>Sound Detected (smoke alarm, glass break and others the camera listens for)</td>
+              </tr>
+              <tr>
+                <th scope="row">Health</th>
+                <td>The tile shows a console or camera that is offline</td>
+                <td>Console and Camera Online and Offline events</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">
+          Control4 plays H.264 video only: if Enhanced Encoding (H.265) is on for a camera in UniFi Protect,
+          turn it off for that camera.
+        </p>
+      </section>
+
+      <section class="driver-section" aria-labelledby="two-title">
+        <h2 id="two-title">Two drivers, install both</h2>
+        <div class="table-wrap">
+          <table class="feature-table">
+            <thead>
+              <tr>
+                <th scope="col">Driver in Composer</th>
+                <th scope="col">File</th>
+                <th scope="col">What it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">DirectorLink · UniFi Protect</th>
+                <td><code>DirectorLink-UniFi-Protect.c4z</code></td>
+                <td>Added once (it shows as UniFi Protect Hub): connects to the console with its API key, adds every camera, serves their pictures, and gives the home one alerts tile.</td>
+              </tr>
+              <tr>
+                <th scope="row">DirectorLink · UniFi Protect Camera</th>
+                <td><code>DirectorLink-UniFi-Protect-Camera.c4z</code></td>
+                <td>One per camera or doorbell, added by the hub: video, pictures, detections, alerts, rings and programming.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="driver-section" aria-labelledby="needs-title">
+        <h2 id="needs-title">What it needs</h2>
+        <ul class="plain-list">
+          <li>A Control4 controller on OS 3.3 or newer, and Composer Pro. Live video needs OS 3.3.2 or newer; on 3.3.0 and 3.3.1 pictures, alerts and rings work.</li>
+          <li>A UniFi console running UniFi Protect 5.3 or newer: Dream Machine (Pro, SE, Pro Max), UNVR, UNVR Pro, Cloud Key Gen2 Plus and the other consoles that run Protect.</li>
+          <li>An API key made on the console. No UniFi username or password is needed.</li>
+          <li>The console reachable from the Control4 controller on port 443.</li>
+        </ul>
+      </section>
+
+      <section class="driver-section" aria-labelledby="setup-title">
+        <h2 id="setup-title">Setup in three steps</h2>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-number" aria-hidden="true">1</span>
+            <h3>Make an API key</h3>
+            <p>On the UniFi console: Settings → Control Plane → Integrations → Create API Key. Copy the key.</p>
+          </li>
+          <li class="step">
+            <span class="step-number" aria-hidden="true">2</span>
+            <h3>Connect the hub</h3>
+            <p>Add <strong>DirectorLink · UniFi Protect</strong> in Composer Pro, enter the console's address and paste the API key. Status says Connected and shows the Protect version.</p>
+          </li>
+          <li class="step">
+            <span class="step-number" aria-hidden="true">3</span>
+            <h3>Add the cameras</h3>
+            <p>Run Actions → Add New Cameras, then drag each camera and doorbell to its room.</p>
+          </li>
+        </ol>
+        <p class="note">
+          Pictures, live video (RTSP or RTSPS), alerts and every setting are on the drivers' Documentation tab
+          in Composer and in the <a href="/drivers/unifi-protect/source" rel="noreferrer">full guide</a>.
+        </p>
+      </section>
+
+      <section class="driver-section" aria-labelledby="dl-title">
+        <h2 id="dl-title">With DirectorLink</h2>
+        <p>
+          <a href="/">DirectorLink</a> 1.10 and newer shows these cameras and doorbells with their pictures,
+          their alerts and their doorbell rings, with nothing to set up. The API key never leaves the
+          controller: DirectorLink takes the pictures the way Control4 apps do, from the hub.
+        </p>
+      </section>
+
+      <section class="driver-section" aria-labelledby="trust-title">
+        <h2 id="trust-title">Privacy and support</h2>
+        <ul class="plain-list">
+          <li>The drivers talk only to the UniFi console on your home network. They send nothing to DirectorLink or to Ubiquiti's cloud and collect no usage data. The API key stays in your Control4 project, and reports and logs never show it, stream tokens or picture passwords.</li>
+          <li>Keep the exact file names: a browser's <code>… (1).c4z</code> copy installs as a separate driver instead of updating.</li>
+          <li>Community-supported, best effort. <a href="/drivers/unifi-protect/issues" rel="noreferrer">Report a problem</a> with the console model, its Protect version, your Control4 OS version and the hub's Print Diagnostics.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>DirectorLink is an independent project, not affiliated with Control4 or Snap One.</p>
+      <p>Not affiliated with or endorsed by Ubiquiti. UniFi is a trademark of its owner.</p>
+      <p>
+        Licensed under Apache-2.0 ·
+        <a href="https://github.directorlink.io" rel="noreferrer">github.directorlink.io</a> ·
+        <a href="/privacy">Privacy</a>
+      </p>
+    </footer>
+  </body>
+</html>

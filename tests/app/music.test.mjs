@@ -235,6 +235,31 @@ test("a room with only a Sonos is a room to show; unmatched Sonos rooms go under
   assert.deepEqual(rooms[1].group.music.map((item) => item.id), [BEDROOM]);
 });
 
+// Control4's own Sonos drivers in the project (1.11.0, ADR-080): while DirectorLink plays Sonos, its
+// driver says their proxies are part of Music (`part_of_music` in /v1/devices), and a room does not
+// list them among the devices the app cannot control, next to the same speakers in Music. With
+// Sonos off, or a driver before 1.11.0 (which says nothing of it), they are listed as before.
+test("Control4's own Sonos players are no other devices of a room while Sonos plays here", async () => {
+  home();
+  controller();
+  await music.loadMusic();
+  state.lights = state.thermostats = state.fans = state.blinds = state.cameras = state.relays = state.doorbells = state.refrigerators = [];
+  const kitchenRoom = { id: 10, name: "Kitchen" };
+  const device = (id, name, partOfMusic) => ({ id, name, type: "other", room: kitchenRoom, supported: false, href: null, part_of: null, part_of_music: partOfMusic });
+  const listed = [device(84, "Sonos Network", true), device(85, "Kitchen Sonos", true), device(40, "Front Door", false)];
+  const others = () => devicesInRoom(10).others.map((item) => item.name);
+  state.devices = listed.map((item) => ({ ...item }));
+  assert.deepEqual(others(), ["Front Door"]);
+  assert.deepEqual(devicesInRoom(10).music.map((item) => item.id), [KITCHEN], "the speakers, in Music");
+
+  state.devices = listed.map(({ part_of_music: _music, ...item }) => item);
+  assert.deepEqual(others(), ["Sonos Network", "Kitchen Sonos", "Front Door"], "a driver before 1.11.0");
+
+  state.devices = listed.map((item) => ({ ...item }));
+  home({ sonos: false });
+  assert.deepEqual(others(), ["Sonos Network", "Kitchen Sonos", "Front Door"], "Sonos off, before the devices are read again");
+});
+
 test("Home and an open room are read every 5 s, other screens not, and nothing once the key is forgotten", async (t) => {
   home();
   t.mock.timers.enable({ apis: ["setTimeout"] });

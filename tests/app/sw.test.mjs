@@ -563,6 +563,53 @@ test("a camera's alert says what it saw at which camera, in the app's words, and
   assert.equal(shown.at(-1).options.tag, "camera-66");
 });
 
+// The sounds a camera hears (1.11.0, ADR-080): said in the worker's own English when the app gave
+// no words, in the app's words otherwise; a smoke or CO alarm keeps a notification of its own, so
+// that the camera's next alert does not take its place.
+test("a camera's smoke alarm is said by name and keeps its own notification; other sounds by name too", async () => {
+  const shown = [];
+  const { storage, push } = await startWorker({ shown });
+  await keepAlertKey(storage);
+  const at = "2026-10-03T18:14:00Z";
+  const clock = sealedClock(at);
+  for (const [what, body, tag] of [
+    ["smoke_alarm", `Smoke alarm at Garden at ${clock}.`, "camera-65-smoke_alarm"],
+    ["co_alarm", `CO alarm at Garden at ${clock}.`, "camera-65-co_alarm"],
+    ["siren", `Siren at Garden at ${clock}.`, "camera-65"],
+    ["baby_crying", `Baby crying at Garden at ${clock}.`, "camera-65"],
+    ["speech", `Someone talking at Garden at ${clock}.`, "camera-65"],
+    ["barking", `Dog barking at Garden at ${clock}.`, "camera-65"],
+    ["burglar_alarm", `Burglar alarm at Garden at ${clock}.`, "camera-65"],
+    ["car_horn", `Car horn at Garden at ${clock}.`, "camera-65"],
+    ["glass_break", `Glass breaking at Garden at ${clock}.`, "camera-65"],
+    ["motion", `Motion at Garden at ${clock}.`, "camera-65"],
+  ]) {
+    await push(sealedPush(sealDetail({ v: 1, kind: "camera", at, id: 65, name: "Garden", room: "Living Room", room_id: 11, what })));
+    assert.equal(shown.at(-1).options.body, body, what);
+    assert.equal(shown.at(-1).options.tag, tag, what);
+    assert.equal(shown.at(-1).options.data.url, "/#/cameras/65", what);
+  }
+
+  // In every language, with the app's words.
+  for (const code of ["he", "es", "it"]) {
+    const { default: words } = await import(`../../app/i18n/${code}.js`);
+    await (await storage.open("directorlink-alerts")).put("/alert-texts.json", new Response(JSON.stringify({
+      lang: code,
+      dir: code === "he" ? "rtl" : "ltr",
+      camera_title: words.alerts.cameraTitle,
+      camera: words.alerts.camera,
+      camera_smoke_alarm: words.alerts.cameraSaw.smoke_alarm,
+      camera_other: words.alerts.cameraSaw.other,
+    })));
+    const name = code === "he" ? "גינה" : "Jardín";
+    await push(sealedPush(sealDetail({ v: 1, kind: "camera", at, id: 66, name, what: "smoke_alarm" })));
+    const time = sealedClock(at, code);
+    const expected = { he: `גלאי עשן ב-גינה ב-${time}.`, es: `Alarma de humo en Jardín a las ${time}.`, it: `Allarme fumo presso Jardín alle ${time}.` }[code];
+    assert.equal(shown.at(-1).options.body, expected, code);
+    assert.equal(shown.at(-1).options.tag, "camera-66-smoke_alarm", code);
+  }
+});
+
 test("a ring the app already shows, or shows on its banner now, is shown again quietly", async () => {
   const shown = [];
   const [ring] = VECTORS.details;

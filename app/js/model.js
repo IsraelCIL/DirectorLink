@@ -112,13 +112,21 @@ function shownIds() {
 }
 
 // A device this app cannot control, unless it is shown already: part of a device shown (1.10.1,
-// `part_of`: a door controller's button shown as the KNX relay it drives, a DoorBird's button), or
-// an alarm partition shown on Home. A driver before 1.10.1 says no `part_of`.
+// `part_of`: a door controller's button shown as the KNX relay it drives, a DoorBird's button), an
+// alarm partition shown on Home, or (1.11.0, ADR-080, `part_of_music`) a proxy of Control4's own
+// Sonos driver while DirectorLink plays those players itself (Music). A driver before 1.10.1 says no
+// `part_of`, one before 1.11.0 no `part_of_music`.
 export function otherDevices(roomId) {
   const id = Number(roomId);
   const shown = shownIds();
+  const music = state.system?.features?.sonos === true;
   return state.devices.filter(
-    (device) => !device.supported && deviceRoomId(device) === id && !shown.has(device.id) && !(device.part_of != null && shown.has(device.part_of))
+    (device) =>
+      !device.supported &&
+      deviceRoomId(device) === id &&
+      !shown.has(device.id) &&
+      !(device.part_of != null && shown.has(device.part_of)) &&
+      !(music && device.part_of_music === true)
   );
 }
 

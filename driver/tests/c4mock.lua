@@ -887,6 +887,30 @@ function Mock.withDoorbellGate(project, gate)
     })
 end
 
+-- Control4's own Sonos drivers (1.11.0, ADR-080), as Snap One names them ("Works With Sonos
+-- Certified"): the household (sonosNetwork.c4z, an AV switch, 84 "Sonos Network" in the Kitchen),
+-- a player each (sonos.c4z, a media service: 85 "Kitchen Sonos", and 86 "Living Room Sonos" on a
+-- copy in another case), a Sonos driver that is its own device (87 "Sonos Line In",
+-- sonosGlobalLineIn.c4z), and Sonance's amplifier (88 "Sonance Amp"), which is not Sonos.
+function Mock.withControl4Sonos(project)
+    local function driver(protocol, file, room, roomName, proxy, name, proxyFile)
+        project.devices[protocol] = {
+            deviceName = "Sonos (Works With Sonos Certified)", driverFileName = file, roomId = room, roomName = roomName,
+            proxies = { [proxy] = { deviceName = name, driverFileName = proxyFile } },
+        }
+        project.devices[proxy] = {
+            deviceName = name, driverFileName = proxyFile, roomId = room, roomName = roomName,
+            protocol = { [protocol] = { deviceName = "Sonos (Works With Sonos Certified)", driverFileName = file } },
+        }
+    end
+    driver(180, "sonosNetwork.c4z", 10, "Kitchen", 84, "Sonos Network", "avswitch.c4i")
+    driver(181, "sonos.c4z", 10, "Kitchen", 85, "Kitchen Sonos", "media_service.c4i")
+    driver(182, "SONOS (1).c4z", 11, "Living Room", 86, "Living Room Sonos", "media_service.c4i")
+    project.devices[87] = { deviceName = "Sonos Line In", driverFileName = "sonosGlobalLineIn.c4z", roomId = 11, roomName = "Living Room" }
+    project.devices[88] = { deviceName = "Sonance Amp", driverFileName = "sonance_dsp2_750.c4z", roomId = 11, roomName = "Living Room" }
+    return project
+end
+
 -- A door controller's state changes as its driver does it: STATE, then the event of that state
 -- (Opened 1, Closed 2, Partial 3, Unknown 4). Returns how many registrations heard the event.
 Mock.CONTROLLER_EVENTS = { Opened = 1, Closed = 2, Partial = 3, Unknown = 4 }

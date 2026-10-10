@@ -117,6 +117,15 @@ Italian); any other label is said as "Alert".
 | `Tamper`, `Scene Change` | Tampering, View changed |
 | `Object Left`, `Object Removed` | Object left behind, Object removed |
 | `Alarm Input`, `PIR` | Alarm input, Motion (PIR) |
+| `Smoke Alarm`, `CO Alarm` | Smoke alarm, CO alarm (sent even right after another alert: below) |
+| `Siren`, `Burglar Alarm` | Siren, Burglar alarm |
+| `Glass Break`, `Car Horn` | Glass breaking, Car horn |
+| `Baby Crying`, `Speech`, `Barking` | Baby crying, Someone talking, Dog barking |
+
+The sounds (from `Smoke Alarm` to `Barking`, DirectorLink 1.11.0 and later) are what a camera
+hears, as the DirectorLink · UniFi Protect driver names them; DirectorLink 1.10.x says them as
+"Alert". One label an alert: when a camera heard several sounds at once, give the most urgent
+(`Smoke Alarm`, then `CO Alarm`); `Smoke Alarm, Siren` is no label.
 
 ## How DirectorLink uses it
 
@@ -128,7 +137,10 @@ Italian); any other label is said as "Alert".
   minutes, its events too. Refresh Project reads everything again at once.
 - **Alerts.** "Person at Garden at 21:14", on the phones and computers that switched on camera alerts
   (off until chosen) and whose user may see that camera's pictures. At most one alert a camera a
-  minute, and 30 camera alerts an hour in the home, so that rings always get through. The driver
+  minute, and 30 camera alerts an hour in the home, so that rings always get through. A smoke or CO
+  alarm (1.11.0) is not held back by the camera's other alerts: at most one of each a camera a
+  minute, whatever else that camera alerted about, and 10 an hour in the home of their own, apart
+  from the 30. The driver
   decides what is worth an alert (its own settings, schedules and snooze): DirectorLink passes on its
   `Alert`, not every detection.
 - **Doorbells.** A `doorbell` is listed with the doorbells as well as with the cameras, under the
@@ -167,6 +179,9 @@ Italian); any other label is said as "Alert".
 
 - **Alert on every motion.** Fire `Alert` once per alert, not again while it lasts, and only for what
   the user asked for: the home's alerts are limited, and a busy camera crowds out the others.
+- **Hold back a smoke or CO alarm** behind another alert of the camera: fire `Alert` with
+  `Smoke Alarm` or `CO Alarm` even while another of its alerts lasts (its hold time):
+  DirectorLink sends it even right after the camera's other alerts.
 - **Fire `Ring` for anything but a press** of a doorbell's button, or from a driver whose kind is
   `camera`.
 - **Put names, addresses or other personal data in `LAST_ALERT`.** It is a label from the list.
@@ -183,7 +198,7 @@ Italian); any other label is said as "Alert".
 
 | DirectorLink | Camera drivers |
 | --- | --- |
-| 1.11.0 and later | The agreement, version 1, unchanged; a Relay Door, Gate or Garage Door Controller on the driver's relay connection is the doorbell's door (ADR-078). |
+| 1.11.0 and later | The sounds among the labels (`Smoke Alarm` … `Barking`); a smoke or CO alarm is not held back by the camera's other alerts (ADR-080). A Relay Door, Gate or Garage Door Controller on the driver's relay connection is the doorbell's door (ADR-078). The agreement stays version 1. |
 | 1.10.0 and later | The agreement, version 1, with `DIRECTORLINK_CAMERA_EVENTS`. A driver that says a later version is read as version 1 (a later version only adds). |
 | 1.8.0 to 1.9.x | Only the DirectorLink · Hikvision Camera driver, by its file name (`DirectorLink-Hikvision-Camera.c4z`), its event 1 and `LAST_ALERT`. Other cameras: pictures only; a doorbell camera is a camera. |
 
@@ -209,4 +224,4 @@ does not set the marker; once it does, by the marker only, never twice.
   controller and bindings), and `GET /v1/doorbells/{id}` lists the gate in `doors` with `link`
   `automatic`.
 
-The decision and its details are ADR-065 in [`DECISIONS.md`](DECISIONS.md).
+The decision and its details are ADR-065 in [`DECISIONS.md`](DECISIONS.md); the sounds, ADR-080.

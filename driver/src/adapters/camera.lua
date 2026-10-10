@@ -23,7 +23,8 @@ Camera.ALERT_EVENT = CameraDrivers.HIKVISION_ALERT_EVENT
 Camera.LAST_ALERT_ID = CameraDrivers.HIKVISION_LAST_ALERT
 -- What an alert saw, by the drivers' labels in lower case without spaces, "_" and "-" (so "License
 -- Plate", "license_plate" and "LicensePlate" are one); anything else is "other". The agreement's
--- labels and the Hikvision driver's.
+-- labels and the Hikvision driver's; since 1.11.0 (ADR-080) the sounds a camera hears, as the
+-- DirectorLink · UniFi Protect driver names them ("Smoke alarm", "CO alarm", ...).
 Camera.DETECTIONS = {
     ["motion"] = "motion",
     ["person"] = "person",
@@ -43,6 +44,15 @@ Camera.DETECTIONS = {
     ["objectremoved"] = "object_removed",
     ["alarminput"] = "alarm_input",
     ["pir"] = "pir",
+    ["smokealarm"] = "smoke_alarm",
+    ["coalarm"] = "co_alarm",
+    ["siren"] = "siren",
+    ["babycrying"] = "baby_crying",
+    ["speech"] = "speech",
+    ["barking"] = "barking",
+    ["burglaralarm"] = "burglar_alarm",
+    ["carhorn"] = "car_horn",
+    ["glassbreak"] = "glass_break",
 }
 -- A doorbell camera's last rings, newest first (as a DoorBird's).
 Camera.MAX_EVENTS = 20

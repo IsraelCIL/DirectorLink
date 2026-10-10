@@ -765,8 +765,8 @@ device's key.
   and schedules that failed go to admin keys only); one for admin keys only is a door or gate
   opened, a schedule that failed, the refrigerator or a camera. Camera alerts (1.8.0, ADR-056) are
   one more kind of the same notice, sealed and padded like the others: the cloud learns that more
-  notices went out (at most 30 an hour from cameras, one a camera a minute), never which camera, what
-  it saw or where. Never which doorbell, door or refrigerator, who opened it, or which schedule.
+  notices went out (at most 30 an hour from cameras, one a camera a minute; since 1.11.0 up to 10
+  more for smoke and CO alarms a camera heard, ADR-080), never which camera, what it saw or where. Never which doorbell, door or refrigerator, who opened it, or which schedule.
   With requests from new devices (1.7.0), also the kind of device and browser that asked, and
   when. With scene links (1.7.0), when a home's linked scenes run and whether they ran. With
   ask-before-opening links (1.8.0), which links are those, when they ask, and which key ids each

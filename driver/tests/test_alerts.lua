@@ -435,6 +435,90 @@ function tests.camera_alerts_are_at_most_thirty_an_hour()
     T.eq(Alerts.camera({ id = 2000, name = "One more", state = { alert = { what = "motion" } } }), 1, "an hour later, again")
 end
 
+-- A smoke or CO alarm a camera heard (1.11.0, ADR-080) is not held back behind that camera's other
+-- alerts: it has a minute of its own per camera and label. The other labels keep the camera's minute.
+function tests.a_smoke_or_co_alarm_is_not_held_back_by_the_cameras_other_alerts()
+    local home = home(nil, Mock.withHikvisionCameras(Mock.project()))
+    home.on("admin", { camera = true })
+    home.notified()
+    local key = home.keys.admin
+    -- What the alerts since the last look said they saw, as the admin's device opens them.
+    local function said()
+        local list = {}
+        for _, item in ipairs(home.notified()) do
+            list[#list + 1] = open(key.key, home.home, key.id, item.message["for"][key.id]).what
+        end
+        return list
+    end
+
+    home.clock.now = home.clock.now + 3600
+    Mock.hikvisionAlert(home.mock, 150, "Motion")
+    T.same(said(), { "motion" })
+    home.clock.now = home.clock.now + 20
+    Mock.hikvisionAlert(home.mock, 150, "Smoke alarm")
+    Mock.hikvisionAlert(home.mock, 150, "Person")
+    Mock.hikvisionAlert(home.mock, 150, "CO alarm")
+    Mock.hikvisionAlert(home.mock, 150, "Glass break")
+    T.same(said(), { "smoke_alarm", "co_alarm" }, "the alarms go within the minute of a motion; a person and glass breaking wait")
+    home.clock.now = home.clock.now + 20
+    Mock.hikvisionAlert(home.mock, 150, "SMOKE_ALARM")
+    T.same(said(), {}, "one smoke alarm a camera a minute")
+    Mock.hikvisionAlert(home.mock, 151, "Smoke alarm")
+    T.same(said(), { "smoke_alarm" }, "another camera's is its own")
+    -- The camera's minute after its motion is over: anything again; its smoke alarm's minute is not.
+    home.clock.now = home.clock.now + 21
+    Mock.hikvisionAlert(home.mock, 150, "Barking")
+    Mock.hikvisionAlert(home.mock, 150, "Speech")
+    T.same(said(), { "barking" }, "noisy sounds keep the camera's minute")
+    Mock.hikvisionAlert(home.mock, 150, "Smoke alarm")
+    T.same(said(), {}, "41 seconds after the last smoke alarm")
+    home.clock.now = home.clock.now + 20
+    Mock.hikvisionAlert(home.mock, 150, "Smoke alarm")
+    T.same(said(), { "smoke_alarm" }, "a minute after it")
+end
+
+-- A busy camera cannot use up what a smoke or CO alarm needs (ADR-080): they count apart from the
+-- cameras' 30 an hour, at most 10 an hour of their own, and the home's 60 an hour holds for them too.
+function tests.smoke_and_co_alarms_have_an_hour_of_their_own_within_the_homes_sixty()
+    local home = home()
+    home.on("admin", { camera = true })
+    home.notified()
+    local Alerts = require("src.cloud.alerts")
+    T.eq(Alerts.URGENT_PER_HOUR, 10)
+    local function camera(id, what)
+        return Alerts.camera({ id = id, name = "Camera " .. id, state = { alert = { what = what } } })
+    end
+    for index = 1, 30 do
+        home.clock.now = home.clock.now + 10
+        T.eq(camera(1000 + index, "motion"), 1)
+    end
+    home.clock.now = home.clock.now + 10
+    T.eq(select(2, camera(2000, "person")), "limit", "the cameras' 30")
+    T.eq(select(2, camera(2001, "glass_break")), "limit", "a sound that is not an alarm counts with the cameras")
+    for index = 1, 10 do
+        home.clock.now = home.clock.now + 10
+        local what = index % 2 == 0 and "co_alarm" or "smoke_alarm"
+        T.eq(camera(3000 + index, what), 1, what .. " " .. index)
+    end
+    home.clock.now = home.clock.now + 10
+    local none, why = camera(4000, "smoke_alarm")
+    T.eq(none, nil)
+    T.eq(why, "limit", "10 an hour")
+    T.eq(#home.notified(), 40)
+    Mock.fireDeviceEvent(home.mock, 110, 102)
+    T.eq(#home.notified(), 1, "a ring still goes")
+
+    -- An hour later: the home's 60 hold for them too.
+    home.clock.now = home.clock.now + 3600
+    for index = 1, 60 do
+        home.clock.now = home.clock.now + 1
+        T.eq(Alerts.ring({ id = 5000 + index, name = "Door " .. index }), 1)
+    end
+    home.notified()
+    T.eq(select(2, camera(4001, "co_alarm")), "limit", "the home's 60")
+    T.eq(#home.notified(), 0)
+end
+
 -- ---- doors and gates ----------------------------------------------------------------------------
 
 function tests.doors_opened_reach_the_admins_who_chose_it_saying_which_and_who()

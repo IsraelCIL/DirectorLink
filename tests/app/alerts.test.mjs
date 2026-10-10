@@ -769,3 +769,27 @@ test("the camera agreement's new labels have their words for the service worker"
   assert.equal(alertTexts().camera_license_plate, "לוחית רישוי");
   await setLanguage("en");
 });
+
+// The sounds a camera hears (1.11.0, ADR-080: the DirectorLink · UniFi Protect driver's labels) are
+// said in the app's words in every language, as "{what} at {name} at {time}." reads them.
+test("the sounds a camera hears have their words for the service worker, in every language", async () => {
+  const { t } = await import("../../app/js/i18n.js");
+  const words = {
+    en: ["Smoke alarm", "CO alarm", "Siren", "Baby crying", "Someone talking", "Dog barking", "Burglar alarm", "Car horn", "Glass breaking"],
+    he: ["גלאי עשן", "גלאי פחמן חד-חמצני", "סירנה", "בכי תינוק", "דיבור", "נביחות", "אזעקת פריצה", "צופר רכב", "שבירת זכוכית"],
+    es: ["Alarma de humo", "Alarma de CO", "Sirena", "Bebé llorando", "Alguien hablando", "Perro ladrando", "Alarma antirrobo", "Claxon", "Rotura de cristal"],
+    it: ["Allarme fumo", "Allarme CO", "Sirena", "Bambino che piange", "Qualcuno parla", "Cane che abbaia", "Allarme antifurto", "Clacson", "Vetro rotto"],
+  };
+  const sounds = ["smoke_alarm", "co_alarm", "siren", "baby_crying", "speech", "barking", "burglar_alarm", "car_horn", "glass_break"];
+  const sentence = { en: "Smoke alarm at Garden at 21:14.", he: "גלאי עשן ב-גינה ב-21:14.", es: "Alarma de humo en Garden a las 21:14.", it: "Allarme fumo presso Garden alle 21:14." };
+  for (const language of ["en", "he", "es", "it"]) {
+    await setLanguage(language);
+    const texts = alertTexts();
+    assert.deepEqual(sounds.map((what) => texts[`camera_${what}`]), words[language], language);
+    const name = language === "he" ? "גינה" : "Garden";
+    assert.equal(texts.camera.replace("{what}", texts.camera_smoke_alarm).replace("{name}", name).replace("{time}", "21:14"), sentence[language], language);
+    // Settings → Alerts says a smoke or CO alarm is not held back by the camera's minute.
+    assert.match(t("alerts.settings.cameraHelp"), { en: /smoke or CO alarm/, he: /גלאי עשן או פחמן חד-חמצני/, es: /alarma de humo o de CO/, it: /allarme fumo o CO/ }[language], language);
+  }
+  await setLanguage("en");
+});

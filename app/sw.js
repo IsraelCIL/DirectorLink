@@ -270,6 +270,15 @@ const ALERT_TEXTS = {
   camera_object_removed: "Object removed",
   camera_alarm_input: "Alarm input",
   camera_pir: "Motion (PIR)",
+  camera_smoke_alarm: "Smoke alarm",
+  camera_co_alarm: "CO alarm",
+  camera_siren: "Siren",
+  camera_baby_crying: "Baby crying",
+  camera_speech: "Someone talking",
+  camera_barking: "Dog barking",
+  camera_burglar_alarm: "Burglar alarm",
+  camera_car_horn: "Car horn",
+  camera_glass_break: "Glass breaking",
   camera_other: "Alert",
 };
 const HISTORY_URL = "/#/settings/history";
@@ -364,7 +373,10 @@ function sealedNotice(detail, texts, home) {
       // A camera's alert (ADR-056, ADR-065): what it saw, in the app's words.
       if (!name) return null;
       const what = /^[a-z_]+$/.test(detail.what ?? "") && typeof texts[`camera_${detail.what}`] === "string" ? texts[`camera_${detail.what}`] : texts.camera_other;
-      return { title: texts.camera_title, body: fill(texts.camera, { what, name, time }), tag: `camera-${id}`, url: id ? `/#/cameras/${id}` : "/#/cameras" };
+      // A smoke or CO alarm (1.11.0, ADR-080) keeps a notification of its own: the camera's next
+      // alert (a motion) does not take its place.
+      const tag = detail.what === "smoke_alarm" || detail.what === "co_alarm" ? `camera-${id}-${detail.what}` : `camera-${id}`;
+      return { title: texts.camera_title, body: fill(texts.camera, { what, name, time }), tag, url: id ? `/#/cameras/${id}` : "/#/cameras" };
     }
     case "fridge_door": {
       if (!name) return null;

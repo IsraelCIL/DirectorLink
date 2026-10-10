@@ -37,6 +37,10 @@
 -- With both (scripts/dev_server.py --agreement-cameras --door-controllers), the doorbell camera 68
 -- "Entrance" has its gate (1.11.0, ADR-078): 76 "Entrance Gate", a Relay Gate Controller (driver
 -- 166) on the relay of the doorbell's driver 158, Mock.withDoorbellGate.
+-- With an argument "c4sonos" (scripts/dev_server.py --control4-sonos), Control4's own Sonos drivers
+-- join the project (1.11.0, ADR-080), Mock.withControl4Sonos: 84 "Sonos Network" and 85 "Kitchen
+-- Sonos" in the Kitchen, 86 "Living Room Sonos" and 87 "Sonos Line In" in the Living Room, and 88
+-- "Sonance Amp" (not Sonos); with Sonos On they are part of Music (/v1/devices: part_of_music).
 -- With an argument "sonos" (scripts/dev_server.py --sonos), the driver's requests to Sonos
 -- players go out through the dev server to the fake players (tests/sonos/fake-sonos.mjs):
 --   out: "FETCH <hex JSON { method, url, headers, body_hex }>\n"
@@ -68,6 +72,7 @@ end
 local sonosForwarding = false
 local agreementCameras = false
 local doorControllers = false
+local control4Sonos = false
 local fahrenheit = false
 local fakeCameras = 0
 for index = 2, #(arg or {}) do
@@ -76,6 +81,7 @@ for index = 2, #(arg or {}) do
     end
     agreementCameras = agreementCameras or arg[index] == "agreement"
     doorControllers = doorControllers or arg[index] == "doors"
+    control4Sonos = control4Sonos or arg[index] == "c4sonos"
     fahrenheit = fahrenheit or arg[index] == "fahrenheit"
     fakeCameras = tonumber((arg[index] or ""):match("^cameras=(%d+)$")) or fakeCameras
 end
@@ -117,6 +123,9 @@ if doorControllers then
 end
 if agreementCameras and doorControllers then
     Mock.withDoorbellGate(project)
+end
+if control4Sonos then
+    Mock.withControl4Sonos(project)
 end
 local mock = Mock.startDriver(project, specText, nil, function()
     Properties["Alarm Status"] = "On"

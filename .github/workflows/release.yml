@@ -1,46 +1,60 @@
 name: Publish DirectorLink Release
 
-# A change of VERSION on main tests and builds the driver ("build", read-only), then waits for the
+# A release starts once "Validate DirectorLink" has passed on a push to main whose commit changed
+# VERSION: the tests ran there, in parallel, on that very commit, and do not run again here. "gate"
+# decides whether there is a release to make and asks GitHub's API whether Validate passed on that
+# commit of main; "build" (read-only) builds and checks the package; then the run waits for the
 # owner to approve the "production" environment (Actions -> the run -> Review deployments) before
 # "publish" creates the release (ADR-075). The build is byte for byte reproducible (docs/BUILD.md),
 # so "publish" builds again from the same commit and publishes only if the files are exactly the
-# ones "build" tested.
+# ones "build" checked. Run by hand (Run workflow, on main), it releases main's latest commit, once
+# Validate has passed on it.
+#
+# A workflow_run runs in this repository's context, with its token, whatever started Validate, and
+# its github.sha is main's latest commit, not the one Validate tested. So every job works on SHA
+# below, and "gate" runs only after a run of Validate that succeeded on a push to main of this
+# repository: never after a pull request's run, a fork's, or another branch's.
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Validate DirectorLink"]
+    types: [completed]
     branches: ["main"]
-    paths:
-      - "VERSION"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  # The commit Validate passed (after Validate), or main's latest commit (run by hand).
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
-  build:
-    name: Test and build
+  gate:
+    name: Is there a release to make?
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # actions: read, to ask which runs of Validate passed; nothing here can write.
+    permissions:
+      contents: read
+      actions: read
     outputs:
-      sums: ${{ steps.sums.outputs.sums }}
+      release: ${{ steps.release.outputs.release }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 2
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.x"
-
-      - name: Install Python tools
-        run: pip install -r requirements-dev.txt
-
-      - name: Install Lua 5.1
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y lua5.1
 
       - name: Read version
         id: version
@@ -54,8 +68,48 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
+      # After Validate, only a commit that changed VERSION is a release (main takes one squashed
+      # commit per pull request, so the commit before is main as it was); run by hand, always.
+      - name: Did this commit change VERSION?
+        id: release
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          BEFORE="$(git show HEAD^:VERSION 2>/dev/null | tr -d '[:space:]' || true)"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$BEFORE" = "$VERSION" ]; then
+            echo "::notice::VERSION is $VERSION, as in the commit before: nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "VERSION: ${BEFORE:-none} -> $VERSION"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # GitHub's word, not only the event's: the latest run of validate.yml on this commit, pushed
+      # to main of this repository, has finished and succeeded (run by hand, nothing else says
+      # so), and the commit is on main.
+      - name: Check that Validate DirectorLink passed on this commit of main
+        if: steps.release.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          RESULT="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=100" \
+            --jq '[.workflow_runs[] | select(.head_sha == env.SHA and .head_repository.full_name == env.GITHUB_REPOSITORY)] | max_by(.id) | if . == null then "none" else "\(.status) \(.conclusion)" end')"
+          echo "Validate DirectorLink on $SHA, pushed to main: $RESULT"
+          if [ "$RESULT" != "completed success" ]; then
+            echo "::error::Validate DirectorLink has not passed on $SHA, pushed to main: nothing released. Re-run it if it failed by chance; after a fix, run this workflow by hand on main."
+            exit 1
+          fi
+          ON_MAIN="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status)"
+          if [ "$ON_MAIN" != "identical" ] && [ "$ON_MAIN" != "behind" ]; then
+            echo "::error::$SHA is not on main ($ON_MAIN): nothing released."
+            exit 1
+          fi
+
       # Before anyone is asked to approve: a release that exists already is never replaced.
       - name: Check that the release does not exist yet
+        if: steps.release.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -66,13 +120,31 @@ jobs:
             exit 1
           fi
 
-      - name: Run driver tests
-        run: lua5.1 driver/tests/run.lua
+  # The driver, time-zone, app and cloud tests and check_contract.py ran in Validate on this
+  # commit; the build is reproducible, so this package is the one Validate built and checked.
+  build:
+    name: Build and check the package
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
 
-      - name: Run the calendar and schedule tests in Israel's and New York's time zones
-        run: |
-          TZ=Asia/Jerusalem lua5.1 driver/tests/run.lua test_calendar test_schedules test_holy_times
-          TZ=America/New_York lua5.1 driver/tests/run.lua test_calendar test_schedules test_holy_times
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Install Python tools
+        run: pip install -r requirements-dev.txt
 
       - name: Check API spec against the driver
         run: python scripts/check_api.py
@@ -83,10 +155,7 @@ jobs:
       - name: Validate package
         run: python scripts/check_package.py
 
-      - name: Check live responses against the API spec
-        run: python scripts/check_contract.py
-
-      - name: Checksums of the tested files
+      - name: Checksums of the checked files
         id: sums
         shell: bash
         run: |
@@ -96,8 +165,8 @@ jobs:
 
   publish:
     name: Publish the release (after the owner's approval)
-    needs: build
-    if: github.ref == 'refs/heads/main'
+    needs: [gate, build]
+    if: github.ref == 'refs/heads/main' && needs.gate.outputs.release == 'true'
     runs-on: ubuntu-24.04
     environment: production
     permissions:
@@ -107,6 +176,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SHA }}
           persist-credentials: false
 
       - name: Set up Python
@@ -130,7 +200,7 @@ jobs:
       - name: Validate package
         run: python scripts/check_package.py
 
-      - name: Check that these are the files the build job tested
+      - name: Check that these are the files the build job checked
         shell: bash
         env:
           TESTED: ${{ needs.build.outputs.sums }}
@@ -138,7 +208,7 @@ jobs:
           BUILT="$(cd dist && sha256sum DirectorLink.c4z openapi.json | tr '\n' ';')"
           echo "$BUILT" | tr ';' '\n'
           if [ -z "$TESTED" ] || [ "$BUILT" != "$TESTED" ]; then
-            echo "::error::The package built here is not the one the build job tested: nothing published."
+            echo "::error::The package built here is not the one the build job checked: nothing published."
             exit 1
           fi
 
@@ -165,7 +235,7 @@ jobs:
             "dist/openapi.json"
             "SHA256SUMS.txt"
             --repo "$GITHUB_REPOSITORY"
-            --target "$GITHUB_SHA"
+            --target "$SHA"
             --title "DirectorLink $TAG"
           )
 

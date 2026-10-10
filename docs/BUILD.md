@@ -105,7 +105,7 @@ Use `localhost` as the controller address and the pairing code the dev server pr
 Built `.c4z` files are not committed. Every official build is produced by GitHub Actions and attached to a GitHub Release. Releases are immutable from 1.1.0 on, once the repository's immutable-releases setting is on: after publishing, neither the tag nor the files can change. 1.0.0 and older were published mutable. The app's update notice offers only immutable releases (ADR-035).
 
 1. Work on a `dev/<feature>` branch and merge it to `main` through a pull request.
-2. Changing `VERSION` on `main` triggers the release workflow (`release.yml`). Its first job runs the tests and checks and builds, with read-only access; then it waits for the owner's approval (below). After it, the second job builds again from the same commit, publishes only if the files are byte for byte the ones the first job tested, and creates the `v<version>` release with:
+2. A commit on `main` that changes `VERSION` is released once **Validate DirectorLink** (`validate.yml`) has passed on it: the release workflow (`release.yml`) does not run the tests again. When Validate completes on `main`, its first job, `gate`, runs only if that run succeeded on a push to `main` of this repository (never after a pull request's run or a fork's), and only for a commit whose `VERSION` differs from the commit before it (`main` takes one squashed commit per pull request); it asks GitHub's API whether Validate passed on that commit and whether the commit is on `main`, and refuses a release that exists. The second job, `build` (read-only), checks the API description against the driver (`check_api.py`), builds and checks the package (`check_package.py`) and records the checksums; the driver, time-zone, app and cloud tests and `check_contract.py` ran in Validate on that same commit, and the build is reproducible, so it is the package Validate built and checked. Then the run waits for the owner's approval (below). After it, `publish` builds again from the same commit, publishes only if the files are byte for byte the ones `build` checked, and creates the `v<version>` release at that commit with:
 
 ```text
 DirectorLink.c4z
@@ -115,11 +115,15 @@ SHA256SUMS.txt
 
 Release notes come from `docs/releases/v<version>.md`. The workflow refuses to replace an existing release, before asking for the approval and again before publishing. `gh release create` uploads the files before it publishes the release, so it works with immutable releases.
 
+From the merge to the approval: about 5 to 7 minutes (Validate's 4 to 6, more when one of its jobs is slow; then `gate` and `build`, about a minute and a half with their runners' start), was about 20. Every push to `main` starts a short **Publish DirectorLink Release** run, which says "nothing to release" when `VERSION` did not change.
+
+When Validate fails on the commit that changed `VERSION`, nothing is built or asked: the release waits. If it failed by chance, **Re-run failed jobs** in Validate's run; once it passes, the release starts by itself. If it needs a fix, merge the fix (it does not change `VERSION`), wait for Validate to pass on it, then **Actions → Publish DirectorLink Release → Run workflow** on `main`: run by hand, the workflow releases `main`'s latest commit, after the same checks (Validate passed on it, the release does not exist yet).
+
 ### After a merge: the owner approves
 
 Nothing reaches production without the owner's approval (ADR-075). Deploying the sites and publishing a release each wait in GitHub's `production` environment. After a merge to `main` that changes `app/`, `console/`, `site/` or `github-link/` (the sites) or `VERSION` (a release):
 
-1. Open **Actions**, then the run: **Deploy DirectorLink sites** for the sites, **Publish DirectorLink Release** for the driver. Its "check" or "build" job runs first; the next one shows **Waiting**.
+1. Open **Actions**, then the run: **Deploy DirectorLink sites** for the sites, **Publish DirectorLink Release** for the driver (it starts when Validate DirectorLink has passed, a few minutes after the merge). Its "check" job, or its "gate" and "build" jobs, run first; the next one shows **Waiting**.
 2. **Review deployments**, tick **production**, **Approve and deploy**. **Reject** stops it; nothing is published.
 3. For the sites, **Watch the live sites** runs once the deploy is done and should say that everything served is the same as the source (see below).
 
@@ -146,7 +150,7 @@ Before deploying `app/`, `console/` and `site/`, the job writes into each a `bui
 {"commit": "<the full commit of main>", "built_at": "2026-10-08T12:00:00Z"}
 ```
 
-`scripts/check_sites.py` checks that the deploy and the release run only in `production` and only from `main`, that no other job reads a secret, that each site gets its `build.json` and publishes it, and the watch below.
+`scripts/check_sites.py` checks that the deploy and the release run only in `production` and only from `main`, that no other job reads a secret, that each site gets its `build.json` and publishes it, and the watch below. For the release it also checks that it starts only after Validate DirectorLink (or by hand), that its first job's condition is exactly the one above (a successful run of Validate on a push to `main` of this repository, or by hand on `main`) and asks GitHub's API whether Validate passed, that every job checks out the commit Validate passed (never `github.sha`, which after Validate is `main`'s latest commit) and creates the release there, that only `publish` may write (exactly `contents: write`), and that it publishes only the files `build` checked.
 
 ### Checking what is served
 

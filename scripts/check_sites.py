@@ -12,8 +12,9 @@ DirectorLink in numbers, which stays hidden until it has totals (ADR-052); the d
 (try/) talks to nothing and stores nothing (ADR-060). Links to the source
 code use the short link: the repository's long address appears only where a machine needs it.
 Nothing reaches production without the owner's approval (ADR-075): the workflows that deploy the
-sites and publish the driver do it only in the "production" environment, and each site gets a
-build.json that the hourly watch compares with the source.
+sites and publish the driver do it only in the "production" environment, each site gets a
+build.json that the hourly watch compares with the source, and a release starts only once
+Validate DirectorLink has passed on its commit of main.
 """
 
 from fnmatch import fnmatch
@@ -655,6 +656,26 @@ PRODUCTION = "production"
 STAMPED_SITES = ("app", "console", "site")
 WATCH_PERMISSIONS = {"contents": "read", "issues": "write"}
 
+# A release does not run the tests again (ADR-075, 2026-10-09): release.yml starts when Validate
+# DirectorLink completes on main (workflow_run) or by hand, and its first job runs only after a run
+# of Validate that succeeded on a push to main of this repository (a workflow_run runs with this
+# repository's token whatever started Validate: a pull request, a fork's too), or by hand on main.
+# Every job works on the commit Validate passed: after Validate, github.sha is main's latest
+# commit, not that one. The first job also asks GitHub whether Validate passed on the commit.
+VALIDATE = "validate.yml"
+RELEASE = "release.yml"
+RELEASE_COMMIT = "${{ github.event.workflow_run.head_sha || github.sha }}"
+RELEASE_GATE = (
+    "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||"
+    " (github.event_name == 'workflow_run' &&"
+    " github.event.workflow_run.conclusion == 'success' &&"
+    " github.event.workflow_run.event == 'push' &&"
+    " github.event.workflow_run.head_branch == 'main' &&"
+    " github.event.workflow_run.head_repository.full_name == github.repository)"
+)
+# A job whose if has one of these runs even when a job it needs failed or was skipped.
+STATUS_OVERRIDE = re.compile(r"\b(always|cancelled|failure)\s*\(")
+
 
 def workflow(name, text):
     data = yaml.safe_load(text)
@@ -714,6 +735,7 @@ def check_workflows(workflows, ignores, tracked):
             fail(f".github/workflows/{name}: the workflow's permissions must be contents: read (the job that publishes asks for more)")
     if not deploys or not releases:
         fail("the sites' deploy (wrangler deploy) and the driver's release (gh release create) must each be in a workflow job")
+    check_release(workflows)
 
     if "watch-live.yml" not in workflows:
         fail(".github/workflows/watch-live.yml must compare the live sites with the source every hour (ADR-075)")
@@ -733,6 +755,58 @@ def check_workflows(workflows, ignores, tracked):
                 fail(f"{folder}/.assetsignore must not keep build.json from being published ({pattern})")
         if f"{folder}/build.json" in tracked:
             fail(f"{folder}/build.json must not be committed: deploy.yml writes it at each deploy")
+
+
+def check_release(workflows):
+    """release.yml runs after Validate DirectorLink passed on a push to main, or by hand on main,
+    on that commit (RELEASE_GATE above)."""
+    for name in (VALIDATE, RELEASE):
+        if name not in workflows:
+            fail(f".github/workflows/{name} is missing: a release starts once Validate DirectorLink has passed")
+    validate = workflow(VALIDATE, workflows[VALIDATE])
+    release = workflow(RELEASE, workflows[RELEASE])
+    where = f".github/workflows/{RELEASE}"
+    triggers = release["on"] if isinstance(release["on"], dict) else {}
+    if set(triggers) != {"workflow_run", "workflow_dispatch"}:
+        fail(f"{where} must run only after Validate DirectorLink (workflow_run) or by hand (workflow_dispatch), "
+             "not on a push or a pull request: the tests run in Validate")
+    after = triggers.get("workflow_run") or {}
+    if after.get("workflows") != [validate.get("name")] or after.get("types") != ["completed"] or after.get("branches") != ["main"]:
+        fail(f"{where} must start when {validate.get('name')} completes on main "
+             f"(workflow_run: workflows: [{validate.get('name')}], types: [completed], branches: [main])")
+    if (release.get("env") or {}).get("SHA") != RELEASE_COMMIT:
+        fail(f"{where} must work on the commit Validate passed: env: SHA: {RELEASE_COMMIT}")
+    if re.search(r"GITHUB_SHA|github\.sha\b", json.dumps(release["jobs"])):
+        fail(f"{where}: use $SHA, the commit Validate passed; after Validate, github.sha is main's latest commit")
+
+    asks = False
+    for job_name, job in release["jobs"].items():
+        here = f"{where} job {job_name}"
+        condition = " ".join(str(job.get("if", "")).split())
+        if not job.get("needs"):
+            if condition != RELEASE_GATE:
+                fail(f"{here} must run only after Validate passed on a push to main of this repository, "
+                     f"or by hand on main: if: {RELEASE_GATE}")
+            asks = asks or "actions/workflows/validate.yml/runs?head_sha=$SHA" in job_runs(job)
+        if STATUS_OVERRIDE.search(condition):
+            fail(f"{here} must not run when a job it needs failed or was skipped (no always(), cancelled() or failure())")
+        for step in job.get("steps", []):
+            checkout = isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/checkout@")
+            if checkout and (step.get("with") or {}).get("ref") != "${{ env.SHA }}":
+                fail(f"{here} must check out the commit Validate passed (with: ref: ${{{{ env.SHA }}}})")
+        permissions = job.get("permissions") or {}
+        if "gh release create" in job_runs(job):
+            if '--target "$SHA"' not in job_runs(job):
+                fail(f"{here} must create the release at the commit Validate passed (--target \"$SHA\")")
+            if permissions != {"contents": "write"}:
+                fail(f"{here} must ask for exactly contents: write")
+            if "needs.build.outputs.sums" not in json.dumps(job):
+                fail(f"{here} must publish only the files the build job checked (needs.build.outputs.sums)")
+        elif not isinstance(permissions, dict) or any(value not in ("read", "none") for value in permissions.values()):
+            fail(f"{here} may only read")
+    if not asks:
+        fail(f"{where} must ask GitHub, before anything is built, whether Validate DirectorLink passed on the commit "
+             "(actions/workflows/validate.yml/runs?head_sha=$SHA)")
 
 
 def check_deploy_workflows():

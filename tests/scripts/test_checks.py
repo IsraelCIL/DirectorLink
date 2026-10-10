@@ -653,7 +653,8 @@ class DeployApproval(unittest.TestCase):
     """check_sites.py (ADR-075): the sites' deploy and the driver's release run only in the
     production environment, which the owner approves and which alone has the Cloudflare token;
     pull requests get no preview versions; each site gets a build.json; the hourly watch only
-    reads the code and writes issues."""
+    reads the code and writes issues; a release starts only after Validate DirectorLink passed on
+    a push to main of this repository, and works on that commit."""
 
     def setUp(self):
         self.workflows = {path.name: path.read_text(encoding="utf-8") for path in (ROOT / ".github" / "workflows").glob("*.yml")}
@@ -677,8 +678,57 @@ class DeployApproval(unittest.TestCase):
 
     def test_the_release_waits_for_the_owner(self):
         self.assertIn("publishes a release without the owner's approval", self.refused(self.edited("release.yml", "    environment: production\n", "")))
-        self.assertIn("only from main", self.refused(self.edited("release.yml", "    if: github.ref == 'refs/heads/main'\n    runs-on: ubuntu-24.04\n    environment: production", "    runs-on: ubuntu-24.04\n    environment: production")))
-        self.assertIn("contents: read", self.refused(self.edited("release.yml", "permissions:\n  contents: read\n\njobs:", "permissions:\n  contents: write\n\njobs:")))
+        publish_if = "    if: github.ref == 'refs/heads/main' && needs.gate.outputs.release == 'true'\n"
+        self.assertIn("only from main", self.refused(self.edited("release.yml", publish_if, "    if: needs.gate.outputs.release == 'true'\n")))
+        self.assertIn("contents: read", self.refused(self.edited("release.yml", "permissions:\n  contents: read\n\nenv:", "permissions:\n  contents: write\n\nenv:")))
+        # Published even when the build failed or was skipped.
+        self.assertIn("must not run when a job it needs failed", self.refused(self.edited("release.yml", publish_if, "    if: always() && github.ref == 'refs/heads/main'\n")))
+        # The files the build job checked, compared with the ones about to be published.
+        self.assertIn("only the files the build job checked", self.refused(self.edited("release.yml", "          TESTED: ${{ needs.build.outputs.sums }}\n", "          TESTED: unchecked\n")))
+        wider = self.edited("release.yml", "    permissions:\n      contents: write\n", "    permissions:\n      contents: write\n      actions: write\n")
+        self.assertIn("exactly contents: write", self.refused(wider))
+        gate_reads = "    permissions:\n      contents: read\n      actions: read\n"
+        self.assertIn("job gate may write to the repository", self.refused(self.edited("release.yml", gate_reads, gate_reads.replace("actions: read", "actions: write"))))
+        self.assertIn("job gate may only read", self.refused(self.edited("release.yml", gate_reads, "    permissions: write-all\n")))
+
+    def test_the_release_runs_only_after_validate_passed_on_main(self):
+        # The tests are not run again: no release on a push of its own.
+        on_push = self.edited("release.yml", "  workflow_dispatch:\n", "  workflow_dispatch:\n  push:\n    branches: [\"main\"]\n")
+        self.assertIn("only after Validate DirectorLink (workflow_run) or by hand", self.refused(on_push))
+        trigger = "    workflows: [\"Validate DirectorLink\"]\n"
+        self.assertIn("must start when Validate DirectorLink completes on main", self.refused(self.edited("release.yml", trigger, "    workflows: [\"Deploy DirectorLink sites\"]\n")))
+        self.assertIn("completes on main", self.refused(self.edited("release.yml", "    branches: [\"main\"]\n  workflow_dispatch:", "  workflow_dispatch:")))
+        # Validate renamed: the release would never start again.
+        renamed = self.edited("validate.yml", "name: Validate DirectorLink\n", "name: Validate\n")
+        self.assertIn("must start when Validate completes on main", self.refused(renamed))
+        # A pull request's run (a fork's too: its branch may be called main), a fork's push, a
+        # failed run, another branch: each clause of the gate is needed, and nothing may widen it.
+        for clause in (
+            "      github.event.workflow_run.conclusion == 'success' &&\n",
+            "      github.event.workflow_run.event == 'push' &&\n",
+            "      github.event.workflow_run.head_branch == 'main' &&\n",
+        ):
+            self.assertIn("must run only after Validate passed on a push to main", self.refused(self.edited("release.yml", clause, "")))
+        fork = " &&\n      github.event.workflow_run.head_repository.full_name == github.repository)\n"
+        self.assertIn("must run only after Validate passed", self.refused(self.edited("release.yml", fork, ")\n")))
+        by_hand = "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||"
+        self.assertIn("must run only after Validate passed", self.refused(self.edited("release.yml", by_hand, "github.event_name == 'workflow_dispatch' ||")))
+        self.assertIn("must run only after Validate passed", self.refused(self.edited("release.yml", "github.repository)\n    runs-on", "github.repository) || true\n    runs-on")))
+        # Run by hand, nothing but GitHub's API says that Validate passed.
+        asks = "actions/workflows/validate.yml/runs?head_sha=$SHA"
+        self.assertIn("whether Validate DirectorLink passed on the commit", self.refused(self.edited("release.yml", asks, "actions/runs")))
+
+    def test_the_release_works_on_the_commit_validate_passed(self):
+        # After Validate, github.sha is main's latest commit, not the one Validate tested.
+        commit = "  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}\n"
+        self.assertIn("env: SHA:", self.refused(self.edited("release.yml", commit, "  SHA: ${{ github.sha }}\n")))
+        self.assertIn("use $SHA", self.refused(self.edited("release.yml", '--target "$SHA"', '--target "$GITHUB_SHA"')))
+        self.assertIn("at the commit Validate passed", self.refused(self.edited("release.yml", '            --target "$SHA"\n', "")))
+        build_checkout = "      sums: ${{ steps.sums.outputs.sums }}\n\n    steps:\n      - name: Checkout\n"
+        checkout = self.workflows["release.yml"].split(build_checkout, 1)[1].split("\n\n", 1)[0]
+        self.assertIn("          ref: ${{ env.SHA }}\n", checkout)
+        main_latest = self.edited("release.yml", build_checkout + checkout, build_checkout + checkout.replace("          ref: ${{ env.SHA }}\n", ""))
+        self.assertIn("job build must check out the commit Validate passed", self.refused(main_latest))
 
     def test_no_other_job_reads_a_secret_or_gets_a_preview(self):
         secret = "        run: lua5.1 driver/tests/run.lua --shard ${{ matrix.part }}/3\n"

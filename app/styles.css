@@ -2467,8 +2467,13 @@ select:disabled {
   gap: 6px;
 }
 
+/* The picker keeps room for a door's whole name: on a narrow phone the button goes under it. */
+.doorbell-link-add .input-row {
+  flex-wrap: wrap;
+}
+
 .doorbell-link-add select {
-  flex: 1;
+  flex: 1 1 14rem;
   min-width: 0;
 }
 

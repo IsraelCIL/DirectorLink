@@ -155,7 +155,7 @@ globalThis.webkitSpeechRecognition = FakeRecognition;
 // ---- the fake controller ---------------------------------------------------------------------
 const HOST = "controller.invalid";
 const KEY = "ak_test";
-const controller = { lights: [], thermostats: [], blinds: [], relays: [], calls: [], patch: null, rtt: 0 };
+const controller = { lights: [], thermostats: [], blinds: [], fans: [], relays: [], calls: [], patch: null, rtt: 0 };
 
 function answer(status, json) {
   return new Response(JSON.stringify(json), { status, headers: { "Content-Type": "application/json" } });
@@ -184,17 +184,18 @@ function handle(method, path, sent) {
   if (method === "POST" && /^\/v1\/scenes\/[0-9a-f]{8}\/run$/.test(path)) return answer(202, { ran: 3, skipped: 0, failed: 0, problems: [] });
   // A Sonos room's volume (1.10.0: louder, quieter).
   if (method === "PATCH" && path.startsWith("/v1/music/")) return answer(202, {});
-  const one = path.match(/^\/v1\/(lights|thermostats|blinds)\/(\d+)$/);
+  const one = path.match(/^\/v1\/(lights|thermostats|blinds|fans)\/(\d+)$/);
   if (one && method === "PATCH") {
     const [, list, id] = one;
     const custom = controller.patch?.(list, Number(id), sent);
     if (custom) return answer(custom.status, custom.body);
     const device = controller[list].find((item) => item.id === Number(id));
-    controller[list] = controller[list].map((item) => (item.id === Number(id) ? { ...item, ...sent, ...(list === "lights" && "brightness" in sent ? { on: sent.brightness > 0 } : {}) } : item));
+    // A level turns a light on, a speed a fan (1.11.0).
+    controller[list] = controller[list].map((item) => (item.id === Number(id) ? { ...item, ...sent, ...(list === "lights" && "brightness" in sent ? { on: sent.brightness > 0 } : {}), ...(list === "fans" && "speed" in sent ? { on: true } : {}) } : item));
     return answer(202, device);
   }
   if (one && method === "GET") return answer(200, controller[one[1]].find((item) => item.id === Number(one[2])));
-  const all = path.match(/^\/v1\/(lights|thermostats|blinds|relays)$/);
+  const all = path.match(/^\/v1\/(lights|thermostats|blinds|fans|relays)$/);
   if (all && method === "GET") return answer(200, { items: controller[all[1]].map((device) => ({ ...device })) });
   if (method === "GET") return answer(200, { items: [] });
   return answer(404, { status: 404, code: "NOT_FOUND", detail: `no ${method} ${path}` });
@@ -246,6 +247,8 @@ async function connect({ role = "member", access = null } = {}) {
   controller.lights = copies(LIGHTS);
   controller.thermostats = copies(THERMOSTATS);
   controller.relays = copies(RELAYS);
+  controller.blinds = [];
+  controller.fans = [];
   Object.assign(state, {
     host: HOST, apiKey: KEY, role, access, status: "connected", loaded: true, notice: null, errors: {}, pending: {},
     rooms: ROOMS, lights: copies(LIGHTS), thermostats: copies(THERMOSTATS), blinds: [], fans: [], cameras: [], relays: copies(RELAYS), doorbells: [], devices: [],
@@ -1179,4 +1182,191 @@ test("after the app's language changes, the last answer, its examples and the fi
   } finally {
     await setLanguage("en");
   }
+});
+
+// ---- 1.11.0 (ADR-079): five things at once, steps for blinds and fans, a room's level, warmer --------
+
+const livingFan = { id: 70, name: "Ceiling Fan", room: room(11), on: true, speed: 2, speeds: [1, 2, 3, 4] };
+
+test("five things in one sentence: each shown as understood, then each done with a tap's request (1.11.0)", async () => {
+  await connect();
+  add("blinds", kitchenBlind);
+  add("fans", livingFan);
+  await say("kitchen lights off, close the blinds, turn on the living room lights, set the living room AC to 22 and turn the fan up");
+  assert.equal(
+    shown(),
+    // (A blind's command is done as it is sent; the room said in the third part counts for the fifth.)
+    "⁨Kitchen⁩: lights offWorking…⁨Kitchen⁩: blinds closedDone⁨Living Room⁩: lights onWorking…⁨Living Room AC⁩: ⁦22°⁩Working…⁨Living Room⁩: fans a speed fasterWorking…",
+  );
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [
+    ["/v1/lights/20", { on: false }],
+    ["/v1/lights/21", { on: false }],
+    ["/v1/blinds/60", { position: 0 }],
+    ["/v1/lights/22", { on: true }],
+    ["/v1/thermostats/30", { target_temperature: 22 }],
+    ["/v1/fans/70", { speed: 3 }],
+  ]);
+  // A sixth thing: nothing is done, and it says how many it takes.
+  await say("kitchen lights off, close the blinds, turn on the living room lights, set the living room AC to 22, turn the fan up and run good night");
+  assert.equal(shown(), "Up to 5 things at a time, please.");
+  await advance(1500);
+  assert.equal(sent("PATCH", /./).length + sent("POST", /./).length, 6, "nothing more was sent");
+});
+
+test("blinds a step: 20 points or the percent said, from where each one is or is going; not known, it says so (1.11.0)", async () => {
+  await connect();
+  add("blinds", kitchenBlind);
+  await say("close the kitchen blinds a bit");
+  await advance(1500);
+  assert.equal(shown(), "⁨Kitchen⁩: blinds 20% more closedDone");
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/blinds/60", { position: 80 }]]);
+  // Already open: nothing to change; by an amount, from where it is.
+  await connect();
+  add("blinds", kitchenBlind);
+  await say("open the kitchen blinds a little more");
+  await advance(1500);
+  assert.equal(shown(), "⁨Kitchen⁩: blinds 20% more openNothing to change.");
+  state.blinds = state.blinds.map((blind) => ({ ...blind, position: 30, target_position: 30 }));
+  await say("open the kitchen blinds by 25%");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/blinds/60", { position: 55 }]]);
+  // In Hebrew.
+  await setLanguage("he");
+  try {
+    await connect();
+    add("blinds", kitchenBlind);
+    await say("תסגרו קצת את התריסים במטבח");
+    await advance(1500);
+    assert.equal(shown(), "⁨מטבח⁩: סגירת התריסים בעוד 20%בוצע");
+    assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/blinds/60", { position: 80 }]]);
+  } finally {
+    await setLanguage("en");
+  }
+  // A blind that doesn't say where it is: never a guess.
+  await connect();
+  add("blinds", { ...kitchenBlind, position: null, position_reported: false });
+  await say("close the kitchen blinds a bit");
+  await advance(1500);
+  assert.equal(shown(), "⁨Kitchen⁩: blinds 20% more closed⁨Kitchen Blind⁩ doesn’t say where it is. Say open, close or a percentage.");
+  assert.equal(sent("PATCH", /./).length, 0);
+  // A gate never opens by a step.
+  await connect({ role: "doors" });
+  await say("open the main gate a bit");
+  await advance(1500);
+  assert.equal(sent("POST", /./).length, 0);
+  assert.equal(ui.relayStage[50], undefined, "not even its first tap");
+  assert.match(shown(), /^I didn’t understand/);
+
+  const { steppedPosition } = await import("../../app/js/commands.js");
+  assert.deepEqual(steppedPosition({ ...kitchenBlind, moving: true, direction: "closing", position: 70, target_position: 40 }, 20), { position: 60 }, "moving: from where it is going");
+  assert.deepEqual(steppedPosition({ ...kitchenBlind, moving: true, direction: "closing", position: 70, target_position: null }, 20).refused !== undefined, true, "moving to where isn't said: not known");
+  assert.deepEqual(steppedPosition({ ...kitchenBlind, position: 90 }, 20), { position: 100 });
+  assert.equal(steppedPosition({ ...kitchenBlind, position: 0 }, -20), null, "already closed");
+  assert.ok(steppedPosition({ ...kitchenBlind, capabilities: { position: false, stop: true } }, 20).refused, "only opens and closes fully");
+});
+
+test("fans a speed faster or slower along their own speeds; an off fan goes to its lowest when faster (1.11.0)", async () => {
+  await connect();
+  add("fans", livingFan);
+  await say("living room fan faster");
+  assert.equal(shown(), "⁨Living Room⁩: fans a speed fasterWorking…");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/fans/70", { speed: 3 }]]);
+  await say("turn the ceiling fan down two speeds");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).slice(1).map((call) => [call.path, call.body]), [["/v1/fans/70", { speed: 1 }]]);
+  await setLanguage("he");
+  try {
+    await connect();
+    add("fans", { ...livingFan, on: false, speed: null });
+    await say("תגביר את המאוורר בסלון");
+    assert.equal(shown(), "⁨סלון⁩: הגברת המאווררים במהירות אחתמבצע…");
+    await advance(1500);
+    assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/fans/70", { speed: 1 }]], "off: on at its lowest");
+  } finally {
+    await setLanguage("en");
+  }
+  const { steppedSpeed } = await import("../../app/js/commands.js");
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 4 }, 1), null, "already at its highest");
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 1 }, -1), null, "slower never turns it off");
+  assert.equal(steppedSpeed({ ...livingFan, on: false, speed: null }, -1), null, "off stays off");
+  assert.deepEqual(steppedSpeed({ ...livingFan, on: false, speed: null }, 2), { speed: 2 });
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 2, speeds: [1, 2, 4] }, 1), { speed: 4 }, "its own speeds");
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 1, speeds: undefined }, 3), { speed: 4 }, "an older driver's four");
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 4 }, -5), { speed: 1 }, "at most to its lowest");
+  assert.deepEqual(steppedSpeed({ ...livingFan, speed: 3, speeds: [1, 2, 4] }, -1), { speed: 2 }, "a speed it doesn't list: the next one down");
+  assert.match(steppedSpeed({ ...livingFan, speed: null }, 1).refused, /doesn’t say which speed/);
+  assert.match(steppedSpeed({ ...livingFan, speeds: [] }, 1).refused, /only turns on and off/);
+});
+
+test("a room's level and step go to its dimmers, and say the switches stay as they are (1.10.3's rule, said since 1.11.0)", async () => {
+  await connect();
+  add("lights", { ...light(26, "Floor Lamp", 11, false), dimmable: false, brightness: null }, heater(24, "Towel warmer", 11, false));
+  await say("set the living room lights to half");
+  assert.equal(shown(), "⁨Living Room⁩: lights 50%Only dimmers get a percentage; switches stay as they are.Working…");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [
+    ["/v1/lights/22", { brightness: 50 }],
+    ["/v1/lights/23", { brightness: 50 }],
+  ]);
+  await say("dim the living room lights to a quarter");
+  assert.ok(shown().startsWith("⁨Living Room⁩: lights 25%Only dimmers get a percentage"), shown());
+  // On and off go to the switch too: nothing to say of it.
+  await say("living room lights on");
+  assert.ok(!shown().includes("Only dimmers"), shown());
+  // A heater that dims, left as it is, and the switch: both said.
+  await connect();
+  add("lights", { ...light(26, "Floor Lamp", 11, false), dimmable: false, brightness: null }, light(27, "Heat lamp", 11, true));
+  await say("living room lights brighter");
+  assert.equal(shown(), "⁨Living Room⁩: lights 20% brighterThe heater “⁨Heat lamp⁩” is left as it is. Only dimmers get a percentage; switches stay as they are.Working…");
+  // Another part that turns the switch on: not said.
+  await say("living room lights to 30% and turn on the floor lamp");
+  assert.ok(!shown().includes("Only dimmers"), shown());
+  for (const [language, text, note] of [
+    ["he", "אורות בסלון 50%", "רק אורות עם עמעום מקבלים אחוז"],
+    ["es", "pon la luz del salón a la mitad", "Solo las luces regulables reciben un porcentaje"],
+    ["it", "metti la luce del soggiorno a metà", "Solo le luci dimmerabili ricevono una percentuale"],
+  ]) {
+    await connectNamed(language);
+    try {
+      add("lights", { ...light(26, "Floor Lamp", 11, false), dimmable: false, brightness: null });
+      await say(text);
+      assert.ok(shown().includes(note), `${language}: ${shown()}`);
+    } finally {
+      await setLanguage("en");
+    }
+  }
+});
+
+test("warmer or cooler without the AC said: the room's one AC; how it is or how one feels does nothing (1.11.0)", async () => {
+  await connect();
+  await say("warmer in the living room");
+  assert.equal(shown(), "⁨Living Room⁩: AC ⁦1°⁩ warmerWorking…");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).map((call) => [call.path, call.body]), [["/v1/thermostats/30", { target_temperature: 25 }]]);
+  await setLanguage("he");
+  try {
+    await say("יותר קר בסלון");
+    await advance(1500);
+    assert.deepEqual(sent("PATCH", /./).slice(1).map((call) => call.body), [{ target_temperature: 24 }]);
+    for (const text of ["יותר חם לי בסלון", "נהיה חם בסלון", "יותר קר פה"]) {
+      await say(text);
+      await advance(1500);
+    }
+  } finally {
+    await setLanguage("en");
+  }
+  for (const text of ["it's warmer in the living room", "I'm colder", "warmer in the living room tomorrow"]) {
+    await say(text);
+    await advance(1500);
+  }
+  assert.equal(sent("PATCH", /./).length, 2, "nothing more was sent");
+  // With an AC and floor heating there: which one.
+  add("thermostats", { ...THERMOSTATS[0], id: 31, name: "Floor Heating", modes: ["off", "heat"], mode: "heat", target_temperature: 22 });
+  await say("warmer in the living room");
+  assert.equal(shown(), "Which one?⁨⁨Living Room AC⁩ · ⁨Living Room⁩⁩: ⁦1°⁩ warmer⁨⁨Floor Heating⁩ · ⁨Living Room⁩⁩: ⁦1°⁩ warmer");
+  await click("command-option:home:1");
+  await advance(1500);
+  assert.deepEqual(sent("PATCH", /./).slice(2).map((call) => [call.path, call.body]), [["/v1/thermostats/31", { target_temperature: 23 }]]);
 });

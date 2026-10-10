@@ -812,9 +812,9 @@ test("a part that would ask names its options, and nothing is done", () => {
   assert.equal(mode.question, "mode");
 });
 
-test("several things: at most three, one door, never the same device twice; Turn off all said twice is one", () => {
-  const four = problem("kitchen lights off and close the blinds and play music and run good night", "tooManyParts");
-  assert.equal(four.max, 3);
+test("several things: at most five (three until 1.11.0), one door, never the same device twice; Turn off all said twice is one", () => {
+  const six = problem("kitchen lights off and close the blinds and play music and run good night and turn on the porch light and open the main gate", "tooManyParts");
+  assert.equal(six.max, 5);
   problem("open the main gate and the garden gate", "oneDoor");
   // A door with another thing: the door (its second tap still waiting) and the other.
   several("open the main gate and turn on the porch light", [{ type: "door", device: { kind: "relay", id: 500 } }, { type: "lights", ids: [106] }]);
@@ -853,9 +853,10 @@ test("lights brighter and dimmer: only with their words, 20 points or the amount
   problem("porch light brighter", "cannotDim");
   problem("living room lights brighter by 150%", "range");
   problem("brighter", "needRoom");
-  // "Dim" alone is still a level to say; "brighter" with a level is not understood.
+  // "Dim" alone is still a level to say; "brighter" with a level is that level (1.11.0: a step to
+  // a level; until then not understood).
   problem("dim the living room lights", "needLevel");
-  unknown("living room lights brighter to 30%");
+  same("living room lights brighter to 30%", { ids: [102, 105], change: { brightness: 30 } });
 });
 
 test("bare more, less and by stay refusals; a time stays a time", () => {
@@ -883,9 +884,10 @@ test("the AC warmer and cooler: a degree, or the degrees said; with the AC said"
   ]) {
     same(text, { ids: [200], change: { temperatureBy: by } });
   }
-  // Not said of the AC: may be how it is, not what to do. "Turn up the AC" is not clear in English.
-  unknown("warmer in the living room");
-  unknown("יותר חם בסלון");
+  // Not said of the AC: since 1.11.0 the room's one thermostat (until then refused as how it may be).
+  // "Turn up the AC" is not clear in English.
+  same("warmer in the living room", { ids: [200], change: { temperatureBy: 1 } });
+  same("יותר חם בסלון", { ids: [200], change: { temperatureBy: 1 } });
   unknown("turn up the living room AC");
   unknown("increase the living room AC");
   // An AC that is off has no setpoint to move; one in auto with two setpoints: which.
@@ -896,8 +898,8 @@ test("the AC warmer and cooler: a degree, or the degrees said; with the AC said"
   const step = problem("living room AC warmer by 20 degrees", "step");
   assert.equal(step.max, 10);
   unknown("living room AC warmer by 20%");
-  // A temperature or a mode with it: not a step.
-  unknown("living room AC warmer to 24");
+  // A temperature with it is that temperature (1.11.0: a step to a level); a mode, not understood.
+  same("living room AC warmer to 24", { ids: [200], change: { temperature: 24 } });
   unknown("living room AC warmer on cool");
 });
 
@@ -1064,4 +1066,222 @@ test("dictation's periods: one at the end parts nothing; one between sentences p
   // "p.m." is a time, a decimal point a number.
   refused("turn on the kitchen lights at 7 p.m.", "time");
   same("set the living room AC to 23.5.", { change: { temperature: 23.5 } });
+});
+
+// ---- 1.11.0 (ADR-079): five things at once, steps for blinds and fans, a step to a level, warmer
+// without the AC ------------------------------------------------------------------------------------
+
+// The kitchen with a fan and an AC too, for five things in one room.
+const KITCHEN = { ...HOME, devices: [...DEVICES, { kind: "fan", id: 401, name: "Fan", room: 1, on: false }, thermostat(204, "Kitchen AC", 1)] };
+
+test("five things in one sentence (1.11.0): the room said once counts for every part after it; all or nothing", () => {
+  several("kitchen lights off, close the blinds, play music, turn on the porch light and set the living room AC to 23", [
+    { type: "lights", room: 1, change: { on: false } },
+    { type: "blinds", room: 1, ids: [300], change: { position: 0 } },
+    { type: "music", ids: ["RINCON_1"], change: { action: "play" } },
+    { device: { kind: "light", id: 106 }, change: { on: true } },
+    { type: "climate", ids: [200], change: { temperature: 23 } },
+  ]);
+  // The kitchen, said once, for the four parts after it.
+  several("turn off the kitchen lights, close the blinds, play music, turn on the fan and set the AC to 22", [
+    { type: "lights", room: 1 },
+    { type: "blinds", room: 1, ids: [300] },
+    { type: "music", room: 1, ids: ["RINCON_1"] },
+    { type: "fans", ids: [401], change: { on: true } },
+    { type: "climate", ids: [204], change: { temperature: 22 } },
+  ], KITCHEN);
+  several("כבו את האור במטבח, תסגרו את התריסים, תנגנו מוזיקה, תדליקו את האור במרפסת ותפעילו את המזגן בסלון על 23", [
+    { type: "lights", room: 1, change: { on: false } },
+    { type: "blinds", room: 1, ids: [300] },
+    { type: "music", ids: ["RINCON_1"] },
+    { type: "lights", room: 4, ids: [106], change: { on: true } },
+    { type: "climate", ids: [200], change: { temperature: 23 } },
+  ]);
+  several("כבו את האור במטבח ותסגרו את התריסים ותנגנו מוזיקה ותדליקו את המאוורר ותכוונו את המזגן ל-22", [{ room: 1 }, { room: 1 }, { room: 1 }, { type: "fans", ids: [401] }, { type: "climate", ids: [204] }], KITCHEN);
+  // The fifth part not understood, refused or impossible: nothing is done, and it says which.
+  assert.deepEqual(part("kitchen lights off, close the blinds, play music, turn on the porch light and close the garage door", "close the garage door", "unknown").words, ["garage"]);
+  assert.equal(part("kitchen lights off, close the blinds, play music, turn on the porch light and open the main gate at 7", "open the main gate at 7", "unknown").refusal, "time");
+  refused("kitchen lights off, close the blinds, play music, turn on the porch light and don't run good night", "not");
+  assert.equal(part("kitchen lights off, close the blinds, play music, turn on the porch light and play music in the porch", "play music in the porch", "problem").problem, "none");
+  // Still one door or gate, never the same device twice; a "?" makes it all a question.
+  problem("kitchen lights off, close the blinds, play music, open the main gate and open the garden gate", "oneDoor");
+  problem("kitchen lights off, close the blinds, play music, turn on the porch light and turn on the kitchen island", "overlap");
+  problem("kitchen lights off, close the blinds, play music, turn on the porch light and run good night?", "question");
+});
+
+test("blinds a step (1.11.0): open or close a bit, a little more, by 20%, 20% more; from where each one is", () => {
+  for (const text of ["open the kitchen blinds a bit", "open the kitchen blinds a little", "open the kitchen shades slightly", "raise the kitchen blinds a bit", "open the kitchen blinds more", "open the kitchen blinds a little more", "open the kitchen a bit", "תפתח קצת את התריס במטבח", "תפתחו טיפה את התריסים במטבח", "תרים קצת את התריס במטבח", "תפתח עוד קצת את התריס במטבח", "תפתח יותר את התריס במטבח"]) {
+    same(text, { type: "blinds", room: 1, ids: [300], change: { positionBy: 20 } });
+  }
+  for (const text of ["close the kitchen shutters a little more", "close the kitchen blinds a bit", "lower the kitchen blinds a little", "תסגרו קצת את התריסים במטבח", "תוריד טיפה את התריס במטבח", "תסגור את התריס במטבח עוד קצת"]) {
+    same(text, { type: "blinds", room: 1, ids: [300], change: { positionBy: -20 } });
+  }
+  for (const [text, by] of [
+    ["raise the kitchen blinds by 20%", 20],
+    ["open the kitchen blinds by 30%", 30],
+    ["open the kitchen blinds 10% more", 10],
+    ["close the kitchen blinds by thirty percent", -30],
+    ["lower the kitchen blinds by 15%", -15],
+    ["תפתח את התריס במטבח ב-20% יותר", 20],
+  ]) {
+    same(text, { ids: [300], change: { positionBy: by } });
+  }
+  // A blind by its name; one that only opens and closes fully has no step.
+  same("open the shutter in the bedroom a bit", { device: { kind: "blind", id: 302 }, change: { positionBy: 20 } });
+  problem("open the window a bit", "noPosition");
+  problem("open the living room blinds a bit", "noPosition");
+  // Several rooms: which room (never every blind of the home).
+  problem("open the blinds a bit", "needRoom");
+  // A position is still a position: "to", a number alone, half.
+  same("open the kitchen blinds 40%", { change: { position: 40 } });
+  same("raise the kitchen blinds to 40%", { change: { position: 40 } });
+  same("close the kitchen blinds halfway", { change: { position: 50 } });
+  // "ב-20%" is "at" as often as "by": with the blind's own verb it is not clear (a step's own word
+  // makes it one: "ב-20% יותר"). "Less" is not clear either. A step needs its unit.
+  refused("תעלה את התריס במטבח ב-20%", "time");
+  refused("תפתח את התריס במטבח ב-20%", "time");
+  refused("open the kitchen blinds less", "time");
+  refused("open the kitchen blinds by 20", "time");
+  problem("open the kitchen blinds by 150%", "range");
+  // A part with no verb takes the step's verb with its "a bit"; a step by an amount lends none, so
+  // the shutter is never opened fully on a guess.
+  several("open the kitchen blinds a bit and the shutter in the bedroom", [{ ids: [300], change: { positionBy: 20 } }, { ids: [302], change: { positionBy: 20 } }]);
+  several("תפתחו קצת את התריס במטבח ואת התריס בחדר שינה", [{ ids: [300], change: { positionBy: 20 } }, { ids: [302], change: { positionBy: 20 } }]);
+  assert.equal(part("open the kitchen blinds by 20% and the shutter in the bedroom", "the shutter in the bedroom", "problem").problem, "needWhat");
+  refused("close the kitchen blinds a bit and the lights", "time");
+});
+
+test("five things at once stay quick in a home with 111 lights (1.11.0)", () => {
+  const rooms = Array.from({ length: 40 }, (_value, index) => ({ id: index + 1, names: [`Room ${index + 1}`, `חדר ${index + 1}`] }));
+  const devices = [
+    ...Array.from({ length: 111 }, (_value, index) => light(1000 + index, `Light ${index} spot`, (index % 40) + 1)),
+    ...Array.from({ length: 22 }, (_value, index) => thermostat(2000 + index, `AC ${index}`, (index % 40) + 1)),
+    ...Array.from({ length: 15 }, (_value, index) => ({ kind: "blind", id: 3000 + index, name: `Shade ${index}`, room: (index % 40) + 1, position: true })),
+  ];
+  const big = { rooms, devices, scenes: Array.from({ length: 30 }, (_value, index) => ({ id: `s${index}`, name: `Scene number ${index}` })) };
+  const sentence = "turn off the lights in room 12, open the shades in room 3 a bit, turn on the lights in room 20, close the shades in room 5 and run scene number 4";
+  const started = performance.now();
+  for (let round = 0; round < 10; round += 1) parseCommand(sentence, big);
+  const each = (performance.now() - started) / 10;
+  assert.ok(each < 100, `${each.toFixed(1)} ms a command`);
+  several(sentence, [{ room: 12, change: { on: false } }, { room: 3, change: { positionBy: 20 } }, { room: 20, change: { on: true } }, { room: 5, change: { position: 0 } }, { type: "scene", id: "s4" }], big);
+});
+
+test("blinds a step never opens a door or a gate, nor makes Turn off all (1.11.0)", () => {
+  for (const text of ["open the main gate a bit", "open the gate a little", "open the main gate by 20%", "open the main gate 20% more", "open the main gate more", "תפתח קצת את השער", "תפתחו קצת את השער במרפסת"]) {
+    refused(text, "time");
+  }
+  // "Close the blinds" is Turn off all; "a bit" is not.
+  same("close the blinds", { type: "offAll", filters: ["blinds"] });
+  problem("close the blinds a bit", "needRoom");
+  problem("close all the blinds a bit", "needRoom");
+});
+
+test("fans faster and slower (1.11.0): one of each fan's own speeds, or the speeds said", () => {
+  for (const text of ["kids room fan faster", "make the ceiling fan faster", "turn the fan up", "turn up the fan in the kids room", "speed up the ceiling fan", "fan speed up", "kids room fan one speed up", "turn the fan up a bit", "increase the fan speed", "faster in the kids room", "תגביר את המאוורר", "תעלה את המאוורר בחדר ילדים", "מאוורר בחדר ילדים מהר יותר", "יותר מהר את המאוורר", "תגביר את המהירות של המאוורר"]) {
+    same(text, { type: "fans", ids: [400], change: { speedBy: 1 } });
+  }
+  for (const text of ["kids room fan slower", "turn the fan down", "turn down the ceiling fan", "decrease the fan speed", "תנמיך את המאוורר", "תוריד את המאוורר בחדר ילדים", "המאוורר לאט יותר"]) {
+    same(text, { type: "fans", ids: [400], change: { speedBy: -1 } });
+  }
+  same("kids room fan two speeds faster", { change: { speedBy: 2 } });
+  same("kids room fan faster by 2 speeds", { change: { speedBy: 2 } });
+  // At most four speeds; a number alone is not a speed.
+  unknown("kids room fan faster by 5 speeds");
+  unknown("kids room fan speed 3");
+  unknown("kids room fan faster by 20%");
+  // A fan that lists no speeds only turns on and off.
+  const plain = { ...HOME, devices: DEVICES.map((device) => (device.kind === "fan" ? { ...device, speeds: [] } : device)) };
+  problem("kids room fan faster", "noSpeeds", plain);
+  same("kids room fan on", { change: { on: true } }, plain);
+  // Faster without a fan in the room.
+  problem("faster in the kitchen", "none");
+});
+
+test("a step to a level (1.11.0): half, a quarter, three quarters, and a step's word with \"to\"", () => {
+  same("set the living room lights to half", { ids: [102, 105], change: { brightness: 50 } });
+  same("dim the kitchen lights to a quarter", { ids: [100, 101], change: { brightness: 25 } });
+  same("kitchen lights to three quarters", { change: { brightness: 75 } });
+  same("kitchen blinds halfway", { type: "blinds", change: { position: 50 } });
+  same("kitchen blinds to a quarter", { type: "blinds", change: { position: 25 } });
+  same("אורות בסלון לרבע", { ids: [102, 105], change: { brightness: 25 } });
+  same("האור בסלון לשלושה רבעים", { change: { brightness: 75 } });
+  same("תפתח את התריס במטבח לחצי", { type: "blinds", change: { position: 50 } });
+  for (const [text, change] of [
+    ["kitchen lights brighter to 80%", { brightness: 80 }],
+    ["brighten the kitchen lights to 80%", { brightness: 80 }],
+    ["תגביר את האור במטבח ל-80%", { brightness: 80 }],
+    ["make the living room AC warmer to 24", { temperature: 24 }],
+    ["kitchen music louder to 40", { volume: 40 }],
+  ]) {
+    same(text, { change });
+  }
+  // A step's word for another kind with a level: not understood.
+  unknown("kitchen lights warmer to 24");
+  // A quarter at a time stays a time.
+  refused("turn on the kitchen lights at a quarter to seven", "time");
+  refused("kitchen lights at a quarter", "time");
+  refused("תדליק את האור במטבח ברבע", "time");
+  refused("תדליק את האור במטבח בעוד רבע שעה", "time");
+  // A quarter in a name stays the name's.
+  same("turn on the lights in the guest quarters", { room: 12 }, { ...HOME, rooms: [...ROOMS, { id: 12, names: ["Guest quarters"] }], devices: [...DEVICES, light(116, "Lamp", 12)] });
+});
+
+test("a room's level and step go to its dimmers only and say which switches stay as they are (1.10.3's rule)", () => {
+  // The living room: the ceiling and the spots dim; the floor lamp only turns on and off; the heater
+  // is left as it is.
+  for (const [text, change] of [
+    ["living room lights to half", { brightness: 50 }],
+    ["living room lights 30%", { brightness: 30 }],
+    ["living room lights brighter", { brightnessBy: 20 }],
+    ["living room lights brighter to 80%", { brightness: 80 }],
+  ]) {
+    same(text, { ids: [102, 105], change, onOff: [103], kept: [104] });
+  }
+  // On, off and 0% go to every light (the heater still left); a light named is not "the room's".
+  for (const text of ["living room lights on", "living room lights off", "living room lights 0%"]) {
+    assert.equal(act(text).onOff, undefined, text);
+  }
+  assert.equal(act("kitchen lights 40%").onOff, undefined, "only dimmers there");
+  same("אורות בסלון 50%", { ids: [1000, 1001, 1002], change: { brightness: 50 }, onOff: [1003] }, IL);
+});
+
+test("warmer or cooler without the AC said (1.11.0): the room's one thermostat; with more, which one", () => {
+  for (const text of ["warmer in the living room", "living room warmer", "a bit warmer in the living room", "יותר חם בסלון", "חם יותר בסלון", "קצת יותר חם בסלון", "פחות קר בסלון"]) {
+    same(text, { type: "climate", room: 2, ids: [200], change: { temperatureBy: 1 } });
+  }
+  for (const text of ["cooler in the living room", "colder in the living room", "יותר קר בסלון", "קר יותר בסלון"]) {
+    same(text, { type: "climate", room: 2, ids: [200], change: { temperatureBy: -1 } });
+  }
+  same("2 degrees warmer in the living room", { change: { temperatureBy: 2 } });
+  same("יותר קר בחדר שינה", { ids: [2001], change: { temperatureBy: -1 } }, IL);
+  // The one thermostat there is off, or in auto with two setpoints: as with the AC said.
+  problem("warmer in the kids room", "isOff");
+  assert.equal(asks("warmer in the bedroom").question, "setpoint");
+  // A room with an AC and floor heating: which one.
+  const floor = { ...HOME, devices: [...DEVICES, thermostat(205, "Floor heating", 2, { modes: ["off", "heat"], mode: "heat" })] };
+  const which = asks("warmer in the living room", floor);
+  assert.equal(which.question, "which");
+  assert.deepEqual(which.options.map((option) => [option.ids[0], option.change]), [[200, { temperatureBy: 1 }], [205, { temperatureBy: 1 }]]);
+  assert.equal(asks("יותר חם בסלון", floor).question, "which");
+  // With the AC said, as before: the room's ACs (not its floor heating).
+  same("living room AC warmer", { ids: [200], change: { temperatureBy: 1 } }, floor);
+  // The whole home: its one thermostat, else which room.
+  const one = { ...HOME, devices: DEVICES.filter((device) => device.kind !== "thermostat" || device.id === 200) };
+  same("warmer", { ids: [200], change: { temperatureBy: 1 } }, one);
+  same("יותר קר", { ids: [200], change: { temperatureBy: -1 } }, one);
+  problem("warmer", "needRoom");
+  // A thermostat named by its own words.
+  same("VRF warmer", { ids: [2003] }, { ...IL, devices: IL.devices.map((device) => (device.id === 2003 ? { ...device, mode: "heat", dual: false } : device)) });
+  // A room without one.
+  problem("warmer in the kitchen", "none");
+});
+
+test("warmer or cooler without the AC said: how it is or how one feels still does nothing (1.11.0)", () => {
+  for (const text of ["it's warmer in the living room", "it's getting colder in the living room", "warmer here", "too warm in the living room", "colder outside", "I'm warmer in the living room", "make it warmer for me in the living room", "יותר חם לי בסלון", "נהיה חם בסלון", "נעשה קר בסלון", "יותר קר פה", "קר יותר כאן", "יותר חם בחוץ", "חם בסלון", "קר לי"]) {
+    refused(text, "feel");
+  }
+  for (const text of ["warmer in the living room tomorrow", "warmer in the living room at 7", "יותר חם בסלון בעוד 10 דקות"]) refused(text, "time");
+  refused("don't make it warmer in the living room", "not");
+  problem("warmer in the living room?", "question");
 });

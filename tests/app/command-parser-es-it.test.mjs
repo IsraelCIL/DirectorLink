@@ -269,7 +269,8 @@ test("Spanish: two or three things in one sentence, the room said once; all or n
     es.refused(text, refusal);
   }
   es.problem("apaga las luces de la cocina y cierra las persianas?", "question");
-  es.problem("apaga las luces de la cocina y cierra las persianas y pon música y activa Cine", "tooManyParts");
+  // At most five (three until 1.11.0).
+  es.problem("apaga las luces de la cocina y cierra las persianas y pon música y activa Cine y enciende la luz de la terraza y abre la puerta del garaje", "tooManyParts");
 });
 
 test("Spanish: a question, said or asked, does nothing", () => {
@@ -302,13 +303,15 @@ test("Spanish: don't does nothing", () => {
 });
 
 test("Spanish: how warm one feels or it is does nothing", () => {
-  for (const text of ["tengo frío", "tengo calor", "hace calor en el salón", "hace frío", "más calor en el salón", "hace más frío en el dormitorio principal", "pon la luz cálida en el salón"]) {
+  // (Since 1.11.0 "más calor en el salón" is the salón's one AC warmer; "aquí" says how it is.)
+  for (const text of ["tengo frío", "tengo calor", "hace calor en el salón", "hace frío", "más calor aquí", "hace más frío en el dormitorio principal", "pon la luz cálida en el salón"]) {
     es.refused(text, "feel");
   }
 });
 
 test("Spanish: más, menos and un poco without a step's words stay refused", () => {
-  for (const text of ["las luces de la cocina más", "luces de la cocina menos", "sube un poco la persiana del salón", "un poco más", "enciende un poco la luz de la cocina", "más en la cocina"]) {
+  // (Since 1.11.0 "sube un poco la persiana del salón" is a step for the blind; never for a door.)
+  for (const text of ["las luces de la cocina más", "luces de la cocina menos", "abre un poco la puerta del garaje", "un poco más", "enciende un poco la luz de la cocina", "más en la cocina"]) {
     es.refused(text, "time");
   }
 });
@@ -523,13 +526,15 @@ test("Italian: don't does nothing", () => {
 });
 
 test("Italian: how warm one feels or it is does nothing", () => {
-  for (const text of ["ho freddo", "ho caldo", "fa caldo in soggiorno", "fa freddo", "più caldo in soggiorno", "fa più freddo in camera da letto", "metti la luce calda in soggiorno"]) {
+  // (Since 1.11.0 "più caldo in soggiorno" is the soggiorno's one AC warmer; "qui" says how it is.)
+  for (const text of ["ho freddo", "ho caldo", "fa caldo in soggiorno", "fa freddo", "più caldo qui", "fa più freddo in camera da letto", "metti la luce calda in soggiorno"]) {
     it.refused(text, "feel");
   }
 });
 
 test("Italian: più, meno and un po' without a step's words stay refused", () => {
-  for (const text of ["luce della cucina più", "luci della cucina meno", "alza un po' la tapparella del soggiorno", "un po' più", "accendi un po' la luce della cucina", "più in cucina"]) {
+  // (Since 1.11.0 "alza un po' la tapparella del soggiorno" is a step for the blind; never for a gate.)
+  for (const text of ["luce della cucina più", "luci della cucina meno", "apri un po' il cancello", "un po' più", "accendi un po' la luce della cucina", "più in cucina"]) {
     it.refused(text, "time");
   }
 });
@@ -761,4 +766,90 @@ test("Spanish and Italian: è asks and parts nothing; a room and a light of one 
   it.several("Spegni la luce della cucina. Chiudi la tapparella.", [{ type: "lights", room: 2 }, { type: "blinds", ids: [301] }]);
   es.refused("Apaga la luz de la cocina. No cierres la persiana.", "not");
   es.problem("apaga la calefacción", "needRoom");
+});
+
+// ---- 1.11.0 (ADR-079): five things at once, steps for blinds and fans, a step to a level, warmer
+// without the AC ------------------------------------------------------------------------------------
+
+test("Spanish and Italian: five things in one sentence, the room said once for every part after it; all or nothing (1.11.0)", () => {
+  es.several("apaga las luces de la cocina, cierra las persianas, pon música, enciende la luz de la terraza y pon el aire del salón a 23", [
+    { type: "lights", room: 2, ids: [103, 104], change: { on: false } },
+    { type: "blinds", room: 2, ids: [301], change: { position: 0 } },
+    { type: "music", room: 2, ids: ["RINCON_ES2"], change: { action: "play" } },
+    { type: "lights", ids: [112], change: { on: true } },
+    { type: "climate", ids: [200], change: { temperature: 23 } },
+  ]);
+  it.several("spegni le luci della cucina, chiudi le tapparelle, metti la musica, accendi le luci del terrazzo e metti il condizionatore del soggiorno a 23", [
+    { type: "lights", room: 2, ids: [103, 104], change: { on: false } },
+    { type: "blinds", room: 2, ids: [301], change: { position: 0 } },
+    { type: "music", room: 2, ids: ["RINCON_IT2"], change: { action: "play" } },
+    { type: "lights", ids: [111], change: { on: true } },
+    { type: "climate", ids: [200], change: { temperature: 23 } },
+  ]);
+  assert.equal(es.parse("apaga las luces de la cocina, cierra las persianas, pon música, enciende la luz de la terraza y cierra la puerta del garaje").part, "cierra la puerta del garaje");
+  es.refused("apaga las luces de la cocina, cierra las persianas, pon música, enciende la luz de la terraza y no actives Cine", "not");
+  it.refused("spegni le luci della cucina, chiudi le tapparelle, metti la musica, accendi le luci del terrazzo e attiva Cinema alle 10", "time");
+  it.problem("spegni le luci della cucina e chiudi le tapparelle e metti la musica e attiva Cinema e accendi le luci del terrazzo e apri la porta del garage", "tooManyParts");
+});
+
+test("Spanish: blinds a step, fans faster and slower, a quarter, más calor without the AC (1.11.0)", () => {
+  for (const text of ["abre un poco la persiana del salón", "sube un poco la persiana del salón", "abre más la persiana del salón", "abre un poco más la persiana del salón", "sube la persiana del salón un 20%", "sube la persiana del salón 20%", "abre la persiana del salón un 20%"]) {
+    es.same(text, { type: "blinds", ids: [300], change: { positionBy: 20 } });
+  }
+  for (const text of ["cierra un poco la persiana del salón", "baja un poco la persiana del salón", "cierra un poco más las persianas del salón"]) {
+    es.same(text, { type: "blinds", ids: [300], change: { positionBy: -20 } });
+  }
+  es.same("cierra un poco más las persianas de la cocina", { room: 2, ids: [301], change: { positionBy: -20 } });
+  es.problem("abre un poco el toldo de la terraza", "noPosition");
+  es.refused("abre un poco la puerta del garaje", "time");
+  es.refused("abre la puerta del garaje un 20%", "time");
+  // A position is still a position.
+  es.same("sube la persiana del salón hasta el 60%", { ids: [300], change: { position: 60 } });
+  es.same("persiana del salón a la mitad", { ids: [300], change: { position: 50 } });
+  for (const text of ["sube el ventilador", "ventilador más rápido", "sube un poco el ventilador", "aumenta la velocidad del ventilador", "sube el ventilador del dormitorio principal una velocidad", "pon el ventilador más rápido"]) {
+    es.same(text, { type: "fans", ids: [400], change: { speedBy: 1 } });
+  }
+  for (const text of ["baja el ventilador", "ventilador más lento", "disminuye la velocidad del ventilador"]) {
+    es.same(text, { type: "fans", ids: [400], change: { speedBy: -1 } });
+  }
+  es.same("pon la luz del salón a un cuarto", { ids: [100, 101], change: { brightness: 25 } });
+  es.same("pon la luz del salón a tres cuartos", { change: { brightness: 75 } });
+  es.same("más luz en el salón al 80%", { change: { brightness: 80 } });
+  // "Cuarto" alone is a room, never a quarter; "en un cuarto de hora" a time.
+  es.same("enciende la luz del cuarto de Nora", { room: 9, ids: [113], change: { on: true } });
+  es.refused("enciende la luz de la cocina en un cuarto de hora", "time");
+  // Warmer without the AC said: the salón's one AC.
+  for (const text of ["más calor en el salón", "menos frío en el salón"]) es.same(text, { type: "climate", room: 1, ids: [200], change: { temperatureBy: 1 } });
+  es.same("más frío en el salón", { ids: [200], change: { temperatureBy: -1 } });
+  es.problem("más calor en el dormitorio principal", "isOff");
+  for (const text of ["hace más calor en el salón", "tengo más frío", "más calor aquí", "demasiado calor en el salón"]) es.refused(text, "feel");
+});
+
+test("Italian: blinds a step, fans faster and slower, a quarter, più caldo without the AC (1.11.0)", () => {
+  for (const text of ["apri un po' la tapparella del soggiorno", "alza un po' la tapparella del soggiorno", "apri di più la tapparella del soggiorno", "apri un po' di più la tapparella del soggiorno", "alza la tapparella del soggiorno del 20%", "alza la tapparella del soggiorno 20%"]) {
+    it.same(text, { type: "blinds", ids: [300], change: { positionBy: 20 } });
+  }
+  for (const text of ["chiudi un po' la tapparella del soggiorno", "abbassa un po' la tapparella del soggiorno", "chiudi un po' di più le tapparelle del soggiorno"]) {
+    it.same(text, { type: "blinds", ids: [300], change: { positionBy: -20 } });
+  }
+  it.same("chiudi un po' di più le tapparelle della cucina", { room: 2, ids: [301], change: { positionBy: -20 } });
+  it.problem("apri un po' la tenda da sole", "noPosition");
+  it.refused("apri un po' il cancello", "time");
+  it.refused("apri la porta del garage del 20%", "time");
+  it.same("metti la tapparella del soggiorno a metà", { ids: [300], change: { position: 50 } });
+  for (const text of ["alza il ventilatore", "ventilatore più veloce", "alza un po' il ventilatore", "aumenta la velocità del ventilatore", "metti il ventilatore più veloce"]) {
+    it.same(text, { type: "fans", ids: [400], change: { speedBy: 1 } });
+  }
+  for (const text of ["abbassa il ventilatore", "ventilatore più lento", "diminuisci la velocità del ventilatore"]) {
+    it.same(text, { type: "fans", ids: [400], change: { speedBy: -1 } });
+  }
+  it.same("metti la luce del soggiorno a un quarto", { ids: [100, 101], change: { brightness: 25 } });
+  it.same("metti la luce del soggiorno a tre quarti", { change: { brightness: 75 } });
+  // "Quarto" alone is the fourth, never a quarter; a quarter of an hour is a time.
+  assert.notEqual(it.parse("metti la luce del soggiorno al quarto").status, "ok");
+  it.refused("accendi la luce della cucina tra un quarto d'ora", "time");
+  it.refused("spegni la luce della cucina alle sette e un quarto", "time");
+  for (const text of ["più caldo in soggiorno", "meno freddo in soggiorno"]) it.same(text, { type: "climate", room: 1, ids: [200], change: { temperatureBy: 1 } });
+  it.same("più freddo in soggiorno", { ids: [200], change: { temperatureBy: -1 } });
+  for (const text of ["fa più caldo in soggiorno", "ho più freddo", "più caldo qui", "troppo caldo in soggiorno"]) it.refused(text, "feel");
 });

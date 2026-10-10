@@ -234,10 +234,11 @@ test("a command to dim a switch is answered plainly, and dims only the dimmers o
   assert.equal(one.problem, "cannotDim");
   const room = parseCommand("kitchen lights 30%", catalog);
   assert.notEqual(room.status, "problem", JSON.stringify(room));
-  const ids = JSON.stringify(room);
+  const ids = JSON.stringify(room.action.ids);
   assert.match(ids, /\b20\b/);
   assert.match(ids, /\b22\b/);
   assert.doesNotMatch(ids, /\b21\b/, "the switch is left out of a level");
+  assert.deepEqual(room.action.onOff, [21], "and said to stay as it is (1.11.0)");
   assert.equal(t("command.problem.cannotDim", { name: "Pendant" }), "Pendant only turns on and off.");
   try {
     await setLanguage("he");

@@ -31,7 +31,12 @@ them in full (ADR-025); ADR-054 says what each became.
   - Without, every device of that type in `room_id`, or in the whole home when `room_id` is null.
     This is worked out each time the scene runs, so a light added to the room later is included.
 - What a step sets:
-  - lights: `{"on": true|false}` or `{"brightness": 0-100}`; on/off-only lights turn on.
+  - lights: `{"on": true|false}` or `{"brightness": 0-100}`. A level above 0 for a room or the
+    whole home (no `device_ids`) goes to the dimmers there, and the lights that only turn on and
+    off (`dimmable` false, ADR-077) stay as they are: they are skipped with `ON_OFF_ONLY` (since
+    2026-10-09, after 1.10.2: on the owner's home some are heaters and a door lock). A light that
+    only turns on and off that the step names by its id turns on. Off and a level of 0 turn every
+    light off, switches too, and `"on": true` turns every one on.
   - climate: any of `mode` (`off`, `heat`, `cool`, `auto`), `target_temperature`, `fan_speed`
     (`low`, `medium`, `high`, `auto`, `on`, `circulate`), and since 1.1.0 `heat_setpoint` and
     `cool_setpoint` instead of `target_temperature` (5–40, cool above heat). With `mode: off`,
@@ -97,7 +102,11 @@ the device routes, and answers `202` with what happened to each device:
   (`DOOR_CONTROL_DISABLED`), a mode a
   unit does not have (`MODE_NOT_SUPPORTED`), a device no longer in the project (`NOT_FOUND`), a
   thermostat left with nothing to do once its refused setpoints are left out, an AC turned on as it
-  was whose last mode is not known yet (`NO_LAST_MODE`, 1.10.0);
+  was whose last mode is not known yet (`NO_LAST_MODE`, 1.10.0), a light that only turns on and off
+  that a level for a room or the whole home leaves as it is (`ON_OFF_ONLY`, also counted in
+  `on_off_only`, every one: their problems come after the others in the 50 listed). A scene link's
+  run that left only such lights is `ran`, History says "3 switches left as they were"
+  (`counts.on_off_only`), and a schedule's run alerts nobody for them;
 - `failed`: refused by the controller.
 
 A thermostat's temperature command is checked before the thermostat gets any command: a refused
@@ -354,5 +363,11 @@ their **Open** there opens it.
   it all of them. Doors and gates are always named, one by one, so a scene never opens more of them
   than were picked. The scene is then saved as before (`PATCH /v1/scenes/{id}` with its
   steps), so this works with any driver that has scenes.
+- Lights (ADR-077): Dim only when a dimmer is there. With a driver that sends a level for a room
+  or the whole home to its dimmers only (`features.scene_levels_dimmers_only`), Add an action says
+  "Only dimmers get a percentage; switches stay as they are." while there are switches there
+  (lights picked one by one get the level, and a switch among them turns on), the action reads
+  "All dimmers" ("Kitchen dimmers" on the scene's card), and a run that left only switches as they
+  are is done: "Done — only dimmers get a percentage; 3 switches stayed as they were".
 - **Home** shows the scenes marked Show on Home, with one-tap Run, above the favorites.
 - Saving leaves out devices and rooms that are no longer in the project, and says so.

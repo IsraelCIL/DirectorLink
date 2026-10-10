@@ -24,6 +24,7 @@ import {
   copyHouse,
   currentSteps,
   devicesOfType,
+  dimmersOnly,
   findScene,
   isolate,
   lastModeSupported,
@@ -1458,6 +1459,9 @@ function addActionView(draft) {
   settle(adding, choices);
   if (editing) editing.setting ??= settingOf(adding);
   const steps = adding.type ? buildSteps(adding, devices, others) : [];
+  // A level for the room or the whole home goes to its dimmers only (ADR-077): said while there are
+  // switches here, which it leaves as they are. Lights picked one by one get it: a switch turns on.
+  const switchesStay = steps.some(dimmersOnly) && devices.some((device) => !device.dimmable);
   const kept = draft.steps.length - (editing ? editing.count : 0);
   const fits = kept + steps.length <= MAX_STEPS;
   const shown = steps.length > 1 ? { ...steps[0], device_ids: steps.flatMap((step) => step.device_ids) } : steps[0];
@@ -1519,7 +1523,13 @@ function addActionView(draft) {
             whichDevices(adding, devices, where, others)
           )
         : h("p", { class: "muted-note" }, t("scenes.add.nothingHere")),
-      adding.type ? addSection(t("scenes.add.do"), doSection(adding, choices)) : null,
+      adding.type
+        ? addSection(
+            t("scenes.add.do"),
+            doSection(adding, choices),
+            switchesStay ? h("p", { class: "notice notice-info", dataset: { key: "add-dimmers-only" } }, t("scenes.add.dimmersOnly")) : null
+          )
+        : null,
       h(
         "div",
         { class: "card scene-section add-foot" },

@@ -561,6 +561,12 @@ local function deviceCommands(step, device)
         if type(set.brightness) == "number" and device.capabilities and device.capabilities.brightness then
             return { { action = "set_brightness", params = { value = set.brightness } } }
         end
+        -- A level for a room or the whole home is for its dimmers (ADR-077, 2026-10-09): a light
+        -- that only turns on and off stays as it is there (a KNX switch may be a door lock or a
+        -- heater). One the step names turns on.
+        if type(set.brightness) == "number" and not step.device_ids then
+            return nil, "ON_OFF_ONLY", "This light only turns on and off; a level for a room or the whole home goes to dimmers only"
+        end
         if set.on == true or type(set.brightness) == "number" then
             return { { action = "on" } }
         end
@@ -647,15 +653,25 @@ end
 -- not possible (skipped), or refused by the controller (failed). A device that ran with a setting
 -- left out is listed in `problems` as "partial" (it counts as ran). `via`: the scene's name, for the
 -- history of the doors it opens.
+-- Switches a room's or the home's level left as they are (ON_OFF_ONLY) are skipped and also
+-- counted in `on_off_only`; their problems come after the others, so that a whole home's switches
+-- do not crowd a failure out of the 50.
 local function run(ctx, steps, via)
     local services = ctx.services
     local result = { ran = 0, skipped = 0, failed = 0, problems = Json.array() }
+    local switches = {}
     local function note(outcome, index, deviceId, code, detail)
         if outcome ~= "partial" then
             result[outcome] = result[outcome] + 1
         end
-        if #result.problems < MAX_PROBLEMS then
-            result.problems[#result.problems + 1] = { step = index, device_id = deviceId, outcome = outcome, code = code, detail = detail }
+        local problem = { step = index, device_id = deviceId, outcome = outcome, code = code, detail = detail }
+        if code == "ON_OFF_ONLY" then
+            result.on_off_only = (result.on_off_only or 0) + 1
+            if #switches < MAX_PROBLEMS then
+                switches[#switches + 1] = problem
+            end
+        elseif #result.problems < MAX_PROBLEMS then
+            result.problems[#result.problems + 1] = problem
         end
     end
     for index, step in ipairs(steps) do
@@ -728,6 +744,12 @@ local function run(ctx, steps, via)
                 end
             end
         end
+    end
+    for _, problem in ipairs(switches) do
+        if #result.problems >= MAX_PROBLEMS then
+            break
+        end
+        result.problems[#result.problems + 1] = problem
     end
     return result
 end

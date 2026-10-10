@@ -477,7 +477,8 @@ address (`C4:GetControllerNetworkAddress`, private IPv4 only). Its key never lea
 - `issued`: the controller keeps the certificate only when its public key is the controller's own,
   its DNS names cover the name, it is valid now and an issuer comes with it (an `issued` answer is
   taken whichever request id it carries: the certificate itself says whether it is the controller's).
-  Then the TLS server starts with it, the old one destroyed by its port first.
+  Then the TLS server starts with it, the old one destroyed by its port first; when the new one
+  cannot start a server, the old one serves again while it is valid (asked again after the backoff).
 - A refusal (`ok` false) or no answer: asked again after 5 minutes, 15, an hour, 6 hours, then once a
   day, or after `retry_s` when it is longer (at most a week). `NAME_MISMATCH` gives the home's own
   name (`name`): the controller takes it, with a new key, and asks at once; `NAME_TAKEN`: a new name,

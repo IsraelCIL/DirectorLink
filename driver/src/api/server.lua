@@ -373,6 +373,12 @@ local function dropStaleConnections(now)
             end)
         end
     end
+    -- A TLS connection's mark whose connection never sent a request nor said it closed.
+    for handle, markedAt in pairs(secureHandles) do
+        if not connections[handle] and now - markedAt > STALE_CONNECTION_SECONDS then
+            secureHandles[handle] = nil
+        end
+    end
 end
 
 function Server.init(options)
@@ -474,12 +480,16 @@ function Server.onStatusChanged(port, status)
 end
 
 -- `secure`: the connection is on the Direct HTTPS server (main.lua tells by its port or identifier).
+-- Director reuses handle numbers: a connection that opens starts afresh, its mark being only its
+-- own (one on 41999 never inherits a closed TLS connection's, which lets the home's name pass the
+-- Host check), and one that closes leaves nothing behind.
 function Server.onConnectionStatusChanged(handle, _port, status, secure)
     if tostring(status) == "OFFLINE" then
         connections[handle] = nil
         secureHandles[handle] = nil
-    elseif secure then
-        secureHandles[handle] = true
+    else
+        connections[handle] = nil
+        secureHandles[handle] = secure and os.time() or nil
     end
 end
 

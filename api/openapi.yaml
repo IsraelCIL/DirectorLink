@@ -543,8 +543,9 @@ paths:
         Access on and the home linked to an account (`409 REMOTE_ACCESS_NEEDED`): the controller then
         makes its name and key once, asks DirectorLink's servers for a certificate (`state`
         `requesting`) and serves the API on port 28443 once it has one (`listening`, tens of seconds
-        later). Off stops the TLS server, forgets the certificate and has DirectorLink's servers
-        delete the name's DNS record; the name and the key stay for the next time. In the history
+        later). Off stops the TLS server (2 s after this answer, which may go over it), forgets the
+        certificate and has DirectorLink's servers delete the name's DNS record; the name and the key
+        stay for the next time. In the history
         (`system` `direct_https`, `to` `on` or `off`). The same switch again changes nothing.
       requestBody:
         required: true
@@ -6830,9 +6831,10 @@ components:
         error:
           type: [string, "null"]
           description: |
-            What keeps it from working, in English (for example "not supported on this OS", or
-            DirectorLink's servers' refusal with when it is tried again); also while `listening`, when
-            the next certificate could not be had yet. Null otherwise.
+            What keeps it from working, for the owner word for word: a short sentence or two in
+            English, never a code alone (for example "Let's Encrypt didn't issue the certificate.
+            Trying again in 15 minutes."); also while `listening`, when the next certificate could not
+            be had yet. Null otherwise.
 
     DirectHttpsSwitch:
       type: object

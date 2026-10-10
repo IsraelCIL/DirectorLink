@@ -73,27 +73,47 @@ DirectHttps.MAX_REMAKES = 3
 -- A certificate the Worker gave that is due all the same (its clock and the controller's differ):
 -- asked again after this long, not at once.
 DirectHttps.SAME_WAIT_SECONDS = 6 * 3600
+-- A TLS server that went offline, or could not be started, while it should listen: started again
+-- after 10 s, 30 s, a minute, 5 minutes, then every 15 minutes. One that Director has not said is
+-- online within SERVER_WATCH_SECONDS counts as not started.
+DirectHttps.SERVER_RETRY_SECONDS = { 10, 30, 60, 300, 900 }
+DirectHttps.SERVER_WATCH_SECONDS = 30
+-- The owner turned it off: the TLS server stops this long after, so that the answer to that request
+-- (it may have come over the TLS server itself) has gone out whole first.
+DirectHttps.STOP_DELAY_SECONDS = 2
 
 local BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
-local UNSUPPORTED = "not supported on this OS: C4:GenerateCSR_ECC gave no private key (it does from OS 3.3.1)"
 
--- What the Worker's codes (docs/RELAY.md) mean, for GET /v1/https and Composer.
+-- `error` in GET /v1/https, which the app shows the owner word for word, and Composer's status: short
+-- sentences. What Director said goes to the log.
+local WORDS = {
+    OLD_OS = "This controller's OS is too old for Direct HTTPS. It needs OS 3.3.1 or later.",
+    KEY_FAILED = "The controller couldn't make its key.",
+    KEY_UNREADABLE = "The controller made a key it can't use.",
+    KEY_NOT_SAVED = "The controller couldn't save its key.",
+    SERVER_FAILED = "The controller couldn't start its HTTPS server.",
+    SERVER_STOPPED = "The controller's HTTPS server stopped.",
+    REMOTE = "It needs Remote Access and the home linked to an account.",
+}
+
+-- What the Worker's codes (docs/RELAY.md) and the controller's own refusals mean, in the same words.
 local REFUSALS = {
-    HTTPS_UNAVAILABLE = "DirectorLink's servers cannot issue certificates right now",
-    NOT_CLAIMED = "the home is not linked to an account",
-    RATE_LIMITED = "too many certificates were asked for",
-    ACME_FAILED = "Let's Encrypt did not issue the certificate",
-    DNS_FAILED = "the home's name could not be written in DNS",
-    ADDRESS_NEEDED = "the controller's address is not a private IPv4 address",
-    INVALID_CSR = "DirectorLink's servers refused the controller's certificate request",
-    INVALID_REQUEST = "DirectorLink's servers refused the request",
-    NAME_TAKEN = "the home's name belongs to another home",
-    NAME_MISMATCH = "the home has another name at DirectorLink's servers",
-    CERTIFICATE_MISMATCH = "the certificate DirectorLink's servers sent is not for this controller's key and name",
-    NO_ANSWER = "DirectorLink's servers did not answer in time",
-    NO_FEATURE = "DirectorLink's servers do not issue certificates yet",
-    ADDRESS_UNKNOWN = "the controller's network address is not known",
-    INTERNAL = "DirectorLink's servers failed",
+    HTTPS_UNAVAILABLE = "DirectorLink's servers can't issue certificates right now.",
+    NOT_CLAIMED = "The home isn't linked to an account.",
+    RATE_LIMITED = "Too many certificates were asked for.",
+    ACME_FAILED = "Let's Encrypt didn't issue the certificate.",
+    DNS_FAILED = "The home's name couldn't be set up.",
+    ADDRESS_NEEDED = "The controller's address isn't a home network address.",
+    INVALID_CSR = "DirectorLink's servers refused the controller's key.",
+    INVALID_REQUEST = "DirectorLink's servers refused the request.",
+    NAME_TAKEN = "The home's name belongs to another home.",
+    NAME_MISMATCH = "The home has another name at DirectorLink's servers.",
+    CERTIFICATE_MISMATCH = "The certificate received isn't for this controller.",
+    SERVER_FAILED = "The new certificate couldn't start the HTTPS server.",
+    NO_ANSWER = "DirectorLink's servers didn't answer in time.",
+    NO_FEATURE = "DirectorLink's servers can't issue certificates yet.",
+    ADDRESS_UNKNOWN = "The controller's address is unknown.",
+    INTERNAL = "DirectorLink's servers failed.",
 }
 
 local state = {
@@ -122,8 +142,19 @@ local state = {
     -- C4:CreateTLSServer was called and the server not destroyed since; ONLINE seen since then.
     created = false,
     listening = false,
-    -- Why it cannot work without help: no key could be made, the TLS server failed.
+    -- Why it cannot work without help: no key could be made, an OS without the TLS server.
     hardError = nil,
+    -- The TLS server is not running while it should (it could not be started, or went offline):
+    -- the words, when it is started again (retry_at), the timer, how many times in a row, and the
+    -- wait for Director's ONLINE after a start.
+    serverError = nil,
+    serverRetryAt = nil,
+    serverTimer = nil,
+    serverFailures = 0,
+    serverWatch = nil,
+    -- The owner turned it off: the TLS server stops when this timer fires (STOP_DELAY_SECONDS).
+    stopTimer = nil,
+    deferStop = false,
     -- The Worker's last refusal (or no answer), { code, retry_at }, and how many in a row.
     failure = nil,
     failures = 0,
@@ -354,7 +385,25 @@ local function address()
     return nil
 end
 
--- What GET /v1/https says in `error`, or nil.
+-- "Trying again in 5 minutes.", from when it will be.
+local function retryWords(at)
+    local seconds = (tonumber(at) or 0) - Clock.now()
+    if seconds <= 60 then
+        return "Trying again in a minute."
+    end
+    local minutes = math.ceil(seconds / 60)
+    if minutes < 60 then
+        return "Trying again in " .. minutes .. " minutes."
+    end
+    local hours = math.floor(minutes / 60 + 0.5)
+    if hours < 36 then
+        return hours == 1 and "Trying again in an hour." or ("Trying again in " .. hours .. " hours.")
+    end
+    local days = math.floor(hours / 24 + 0.5)
+    return days == 1 and "Trying again in a day." or ("Trying again in " .. days .. " days.")
+end
+
+-- What GET /v1/https says in `error`, or nil: a sentence or two, for the owner.
 local function errorText()
     if not isOn() then
         return nil
@@ -363,16 +412,19 @@ local function errorText()
         return state.hardError
     end
     local listening = state.listening and validNow()
+    if state.serverError and not listening then
+        return state.serverError .. " " .. retryWords(state.serverRetryAt)
+    end
     if not remoteReady() then
         if listening and not renewalDue() then
             return nil
         end
-        return "Remote Access is off in Composer, or the home is not linked to an account: the certificate comes through DirectorLink's servers"
+        return WORDS.REMOTE
     end
     if state.failure then
-        local text = REFUSALS[state.failure.code] or ("DirectorLink's servers refused it (" .. tostring(state.failure.code) .. ")")
+        local text = REFUSALS[state.failure.code] or REFUSALS.INTERNAL
         if state.failure.retry_at then
-            text = text .. "; trying again at " .. Clock.iso(state.failure.retry_at)
+            text = text .. " " .. retryWords(state.failure.retry_at)
         end
         return text
     end
@@ -404,7 +456,7 @@ local function statusText()
     elseif current == "off" then
         return "Allowed: the home's owner turns it on in the app"
     elseif current == "error" then
-        return "Error: " .. tostring(errorText())
+        return "Error: " .. tostring(errorText()):gsub("%.$", "")
     elseif current == "requesting" then
         return "Asking for a certificate" .. (name and (" for " .. name) or "")
     end
@@ -421,7 +473,18 @@ local function publish()
     end
 end
 
+local function cancelWatch()
+    cancel(state.serverWatch)
+    state.serverWatch = nil
+end
+
+local function stopServerRetry()
+    cancel(state.serverTimer)
+    state.serverTimer, state.serverRetryAt, state.serverError, state.serverFailures = nil, nil, nil, 0
+end
+
 local function destroyServer(reason)
+    cancelWatch()
     if not state.created then
         return
     end
@@ -434,25 +497,74 @@ local function destroyServer(reason)
     log("info", "TLS server stopped", { port = DirectHttps.PORT, name = state.stored and state.stored.name or Json.null, reason = reason })
 end
 
+local serverTrouble
+
+-- The TLS server with the stored certificate and key. Returns true, or false and what Director
+-- said (for the log). Director says ONLINE once it listens; without that within
+-- SERVER_WATCH_SECONDS it counts as not started.
 local function createServer()
     local stored = state.stored
     if not has("CreateTLSServer") then
-        state.hardError = "not supported on this OS: C4:CreateTLSServer is missing"
-        log("error", "TLS server failed", { port = DirectHttps.PORT, name = stored.name, error = state.hardError })
-        return false
+        state.hardError = WORDS.OLD_OS
+        log("error", "TLS server failed", { port = DirectHttps.PORT, name = stored.name, detail = "C4:CreateTLSServer is missing" })
+        return false, "C4:CreateTLSServer is missing"
     end
     local ok, result, failure = pcall(function()
         return C4:CreateTLSServer(DirectHttps.PORT, "", DirectHttps.TLS_OPTIONS, DirectHttps.VERIFY_MODE, "",
             stored.certificate, stored.key, "", stored.chain, DirectHttps.IDENTIFIER)
     end)
     if not ok or result == false then
-        state.hardError = "the TLS server could not be started: " .. short(ok and failure or result)
-        log("error", "TLS server failed", { port = DirectHttps.PORT, name = stored.name, error = state.hardError })
-        return false
+        local detail = short(ok and failure or result)
+        log("error", "TLS server failed", { port = DirectHttps.PORT, name = stored.name, detail = detail })
+        return false, detail
     end
-    state.created, state.listening, state.hardError = true, false, nil
+    state.created, state.listening = true, false
+    cancelWatch()
+    local watch
+    watch = after(DirectHttps.SERVER_WATCH_SECONDS, function()
+        if state.serverWatch == watch then
+            state.serverWatch = nil
+            if state.created and not state.listening and isOn() then
+                log("warn", "TLS server not online " .. DirectHttps.SERVER_WATCH_SECONDS .. " s after it was started", { port = DirectHttps.PORT })
+                serverTrouble(WORDS.SERVER_FAILED)
+                publish()
+            end
+        end
+    end)
+    state.serverWatch = watch
     log("info", "TLS server started", { port = DirectHttps.PORT, name = stored.name, not_after = stored.not_after or Json.null })
     return true
+end
+
+-- The TLS server should listen and does not (`words`: why, for the owner): started again after the
+-- next step of SERVER_RETRY_SECONDS, while it still should then.
+serverTrouble = function(words)
+    state.serverError = words
+    if state.serverTimer then
+        return
+    end
+    state.serverFailures = state.serverFailures + 1
+    local wait = DirectHttps.SERVER_RETRY_SECONDS[math.min(state.serverFailures, #DirectHttps.SERVER_RETRY_SECONDS)]
+    state.serverRetryAt = Clock.now() + wait
+    local timer
+    timer = after(wait, function()
+        if state.serverTimer ~= timer then
+            return
+        end
+        state.serverTimer = nil
+        if not isOn() or not hasCertificate() or not validNow() or state.listening then
+            publish()
+            return
+        end
+        log("info", "TLS server started again", { port = DirectHttps.PORT, tries = state.serverFailures })
+        destroyServer("started again")
+        if not createServer() then
+            serverTrouble(WORDS.SERVER_FAILED)
+        end
+        publish()
+    end)
+    state.serverTimer = timer
+    log("warn", "TLS server not running; started again later", { port = DirectHttps.PORT, retry_s = wait, failures = state.serverFailures })
 end
 
 -- A key and CSR for `name` (the stored name, or a new one the first time). Returns true, or false
@@ -461,8 +573,8 @@ end
 local function makeKey(name)
     name = name or (state.stored and state.stored.name) or newName()
     if not has("GenerateCSR_ECC") then
-        state.hardError = "not supported on this OS: C4:GenerateCSR_ECC is missing"
-        log("error", "no key made", { name = name, error = state.hardError })
+        state.hardError = WORDS.OLD_OS
+        log("error", "no key made", { name = name, detail = "C4:GenerateCSR_ECC is missing" })
         return false
     end
     -- The name in the subject only: Director (OS 4.2.1) writes a subjectAltName given here as the
@@ -477,21 +589,22 @@ local function makeKey(name)
         end)
     end
     if not ok or not isText(csr) then
-        state.hardError = "the key could not be made: " .. short(ok and publicKey or csr)
-        log("error", "no key made", { name = name, error = state.hardError })
+        state.hardError = WORDS.KEY_FAILED
+        log("error", "no key made", { name = name, detail = short(ok and publicKey or csr) })
         return false
     end
     -- Before OS 3.3.1 the function gives only the CSR: its key stays inside Director.
     if not isText(privateKey) or not privateKey:find("PRIVATE KEY-----", 1, true) then
-        state.hardError = UNSUPPORTED
-        log("error", "no key made", { name = name, error = state.hardError, returned = isText(publicKey) and "csr and public key" or "csr only" })
+        state.hardError = WORDS.OLD_OS
+        log("error", "no key made", { name = name, detail = "C4:GenerateCSR_ECC gave no private key (it does from OS 3.3.1)",
+            returned = isText(publicKey) and "csr and public key" or "csr only" })
         return false
     end
     local blocks = X509.pemBlocks(csr, "CERTIFICATE REQUEST")
     local parsed = blocks and blocks[1] and X509.readRequest(blocks[1])
     if not parsed then
-        state.hardError = "the certificate request Director made could not be read"
-        log("error", "no key made", { name = name, error = state.hardError })
+        state.hardError = WORDS.KEY_UNREADABLE
+        log("error", "no key made", { name = name, detail = "the certificate request Director made could not be read" })
         return false
     end
     local previous = state.stored
@@ -506,8 +619,8 @@ local function makeKey(name)
     }
     if not save() then
         state.stored = previous
-        state.hardError = "the key could not be saved"
-        log("error", "no key made", { name = name, error = state.hardError })
+        state.hardError = WORDS.KEY_NOT_SAVED
+        log("error", "no key made", { name = name, detail = "the store did not take it" })
         return false
     end
     state.times, state.hardError = nil, nil
@@ -518,8 +631,10 @@ end
 
 -- The certificate is no longer used: the TLS server stops, and it is forgotten (it expires by
 -- itself). The name and the key stay.
-local function forgetCertificate(reason)
-    destroyServer(reason)
+local function forgetCertificate(reason, keepServer)
+    if not keepServer then
+        destroyServer(reason)
+    end
     local stored = state.stored
     if stored and stored.certificate then
         stored.certificate, stored.chain, stored.not_before, stored.not_after = nil, nil, nil, nil
@@ -596,7 +711,9 @@ end
 -- The certificate the Worker sent (`certificate`, PEM, maybe followed by its issuers; `chain`, the
 -- issuers): kept only when it is for this controller's key and name, valid now, with at least one
 -- issuer (iPhones and iPads do not fetch a missing one). Then the TLS server starts again with it.
--- Returns true, or false and why not (for the log; never the certificate's text).
+-- The running server is replaced only once the new certificate has started one (Director takes one
+-- server a port): when it cannot, the one before comes back while its certificate is valid.
+-- Returns true, or false, why not (for the log; never the certificate's text) and its code.
 local function install(certificateText, chainText)
     if not hasKey() then
         return false, "no key"
@@ -648,26 +765,40 @@ local function install(certificateText, chainText)
     for field, value in pairs(state.stored) do
         previous[field] = value
     end
+    local oldWorks = hasCertificate() and validNow()
     state.stored.certificate = leafPem
     state.stored.chain = table.concat(chainPem)
     state.stored.not_before = leaf.not_before
     state.stored.not_after = leaf.not_after
     state.stored.issuer_cn = leaf.issuer_cn
     state.stored.installed_at = Clock.iso()
-    if not save() then
-        state.stored = previous
-        return false, "it could not be saved"
-    end
     state.times = nil
+    -- The old server goes first: Director takes one server a port.
+    destroyServer("new certificate")
+    cancel(state.serverTimer)
+    state.serverTimer, state.serverRetryAt, state.serverError = nil, nil, nil
+    local started, detail = createServer()
+    if not started and oldWorks then
+        state.stored, state.times = previous, nil
+        log("warn", "the new certificate did not start the TLS server; the one before is used again", { name = name, detail = detail or Json.null })
+        if not createServer() then
+            serverTrouble(WORDS.SERVER_FAILED)
+        end
+        return false, "it did not start the TLS server", "SERVER_FAILED"
+    end
+    if not started then
+        -- Nothing to go back to: kept, and the server started again later.
+        serverTrouble(WORDS.SERVER_FAILED)
+    end
+    if not save() then
+        log("warn", "the certificate could not be saved; it is used until the driver restarts", { name = name })
+    end
     log("info", "certificate installed", {
         name = name,
         not_after = leaf.not_after,
         issuer_cn = leaf.issuer_cn or Json.null,
         intermediates = #intermediates,
     })
-    -- The old server goes first: Director takes one server a port.
-    destroyServer("new certificate")
-    createServer()
     return true
 end
 
@@ -725,7 +856,21 @@ sync = function(_reason)
         return
     end
     if not isOn() then
-        destroyServer("off")
+        if state.deferStop and state.created then
+            -- The owner's request may be on this server: stopped once its answer has gone.
+            if not state.stopTimer then
+                state.stopTimer = after(DirectHttps.STOP_DELAY_SECONDS, function()
+                    state.stopTimer, state.deferStop = nil, false
+                    if not isOn() then
+                        destroyServer("turned off")
+                        publish()
+                    end
+                end)
+            end
+        else
+            destroyServer("off")
+        end
+        stopServerRetry()
         clearAsking()
         stopRetry()
         state.failure, state.failures = nil, 0
@@ -735,6 +880,12 @@ sync = function(_reason)
         publish()
         return
     end
+    if state.stopTimer then
+        -- On again before the server stopped: it stays.
+        cancel(state.stopTimer)
+        state.stopTimer = nil
+    end
+    state.deferStop = false
     if not hasKey() and not state.hardError then
         makeKey()
     end
@@ -745,8 +896,10 @@ sync = function(_reason)
     if hasCertificate() and expired() then
         forgetCertificate("expired")
     end
-    if hasCertificate() and validNow() and not state.created and not state.hardError then
-        createServer()
+    if hasCertificate() and validNow() and not state.created and not state.hardError and not state.serverTimer then
+        if not createServer() then
+            serverTrouble(WORDS.SERVER_FAILED)
+        end
     end
     if remoteReady() and relayTakes() and not state.asking then
         local ip = address()
@@ -784,7 +937,7 @@ local function onCertificateResult(message)
         if not isOn() then
             return
         end
-        local ok, why = install(message.certificate, message.chain)
+        local ok, why, code = install(message.certificate, message.chain)
         if ok then
             succeeded()
             if renewalDue() then
@@ -798,7 +951,7 @@ local function onCertificateResult(message)
             end
         else
             log("warn", "certificate refused", { name = state.stored and state.stored.name or Json.null, why = why })
-            failed("CERTIFICATE_MISMATCH")
+            failed(code or "CERTIFICATE_MISMATCH")
         end
         sync("certificate")
         return
@@ -920,6 +1073,10 @@ function DirectHttps.configure(options)
     state.failure, state.failures, state.remakes = nil, 0, 0
     clearAsking()
     stopRetry()
+    stopServerRetry()
+    cancelWatch()
+    cancel(state.stopTimer)
+    state.stopTimer, state.deferStop = nil, false
     cancel(state.tick)
     state.tick = nil
     pcall(function()
@@ -977,7 +1134,9 @@ function DirectHttps.setEnabled(on, actor)
     else
         state.stored.enabled = nil
         state.stored.dns_off = true
-        forgetCertificate("turned off")
+        -- The TLS server stops a moment later (sync), after this answer, which may go over it.
+        state.deferStop = true
+        forgetCertificate("turned off", true)
     end
     if not save() then
         state.stored.enabled = before and true or nil
@@ -1025,6 +1184,9 @@ function DirectHttps.stop()
     destroyServer("driver stopped")
     clearAsking()
     stopRetry()
+    stopServerRetry()
+    cancel(state.stopTimer)
+    state.stopTimer, state.deferStop = nil, false
     cancel(state.tick)
     state.tick = nil
 end
@@ -1044,6 +1206,13 @@ function DirectHttps.onStatusChanged(port, status)
     end
     state.listening = status == "ONLINE"
     log("info", "TLS server " .. status, { port = tonumber(port) or port, name = name })
+    if state.listening then
+        cancelWatch()
+        stopServerRetry()
+    elseif isOn() and hasCertificate() and validNow() and not state.deferStop then
+        -- Director stopped it while it should listen: started again, with a backoff.
+        serverTrouble(WORDS.SERVER_STOPPED)
+    end
     publish()
 end
 

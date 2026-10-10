@@ -1531,6 +1531,10 @@ function Mock.install(project)
         if mock.tlsFails then
             return false, mock.tlsFails
         end
+        -- mock.tlsRefuses: certificate (PEM) -> what Director says when it cannot start with it.
+        if mock.tlsRefuses and mock.tlsRefuses[certificate] then
+            return false, mock.tlsRefuses[certificate]
+        end
         mock.tlsServers[port] = server
         return true
     end

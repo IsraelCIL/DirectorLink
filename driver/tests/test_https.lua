@@ -442,7 +442,7 @@ function tests.a_certificate_for_another_key_or_name_is_refused()
         T.eq(#s.mock.tlsCalls, 0, "case " .. index)
         local current = status(s)
         T.eq(current.state, "error", "case " .. index)
-        T.contains(current.error, "not for this controller's key and name", "case " .. index)
+        T.eq(current.error, "The certificate received isn't for this controller. Trying again in 5 minutes.", "case " .. index)
         T.eq(current.certificate, Json.null, "case " .. index)
         T.contains(logText(s.mock), "certificate refused")
         T.truthy(hasTimer(s.mock, 300), "asked again after 5 minutes")
@@ -460,8 +460,8 @@ function tests.the_workers_refusals_are_shown_and_asked_again_with_a_backoff()
     relaySays(s, { type = "https_certificate_result", id = asked.id, ok = false, code = "RATE_LIMITED", retry_s = 7200 })
     local current = status(s)
     T.eq(current.state, "error")
-    T.contains(current.error, "too many certificates were asked for; trying again at ")
-    T.contains(s.mock.properties["Direct HTTPS Status"], "Error: too many certificates")
+    T.eq(current.error, "Too many certificates were asked for. Trying again in 2 hours.")
+    T.eq(s.mock.properties["Direct HTTPS Status"], "Error: Too many certificates were asked for. Trying again in 2 hours")
     T.eq(#httpsMessages(s), 0)
     -- Nothing at the next tick: it waits.
     tick(s.mock)
@@ -474,20 +474,20 @@ function tests.the_workers_refusals_are_shown_and_asked_again_with_a_backoff()
     T.truthy(again[1].id ~= asked.id)
     -- The second refusal in a row: 15 minutes; the third, an hour.
     relaySays(s, { type = "https_certificate_result", id = again[1].id, ok = false, code = "ACME_FAILED" })
-    T.contains(status(s).error, "Let's Encrypt did not issue the certificate")
+    T.eq(status(s).error, "Let's Encrypt didn't issue the certificate. Trying again in 15 minutes.")
     fire(s.mock, 900)
     local third = httpsMessages(s)[1]
     relaySays(s, { type = "https_certificate_result", id = third.id, ok = false, code = "HTTPS_UNAVAILABLE" })
-    T.contains(status(s).error, "cannot issue certificates right now")
+    T.eq(status(s).error, "DirectorLink's servers can't issue certificates right now. Trying again in an hour.")
     fire(s.mock, 3600)
     local fourth = httpsMessages(s)[1]
     -- No answer within a minute counts too.
     fire(s.mock, 60)
-    T.contains(status(s).error, "did not answer in time")
+    T.contains(status(s).error, "DirectorLink's servers didn't answer in time.")
     T.truthy(hasTimer(s.mock, 6 * 3600))
     -- An answer to an earlier request changes nothing.
     relaySays(s, { type = "https_certificate_result", id = fourth.id, ok = false, code = "INTERNAL" })
-    T.contains(status(s).error, "did not answer in time")
+    T.contains(status(s).error, "DirectorLink's servers didn't answer in time.")
     T.contains(logText(s.mock), "no certificate from DirectorLink's servers")
 
     -- Pending, then nothing for 15 minutes: asked again later.
@@ -662,7 +662,7 @@ function tests.the_worker_hears_of_a_new_address()
     end })
     T.eq(switch(public, true).status, 200)
     T.eq(#httpsMessages(public), 0)
-    T.contains(status(public).error, "not a private IPv4 address")
+    T.contains(status(public).error, "The controller's address isn't a home network address.")
 end
 
 function tests.a_request_whose_connection_ended_is_asked_again_on_the_next()
@@ -688,7 +688,7 @@ function tests.a_relay_that_issues_no_certificates_is_said()
     T.eq(#httpsMessages(s), 0, "nothing asked of a relay that does not say https")
     local current = status(s)
     T.eq(current.state, "error")
-    T.contains(current.error, "do not issue certificates yet")
+    T.eq(current.error, "DirectorLink's servers can't issue certificates yet.")
     -- Not connected: it waits, without an error.
     local down = home({ features = false })
     T.eq(switch(down, true).status, 200)
@@ -706,6 +706,8 @@ function tests.turned_off_the_server_stops_the_certificate_goes_and_the_record_i
     T.eq(answer.json.state, "off")
     T.eq(answer.json.certificate, Json.null)
     T.eq(answer.json.name, asked.name, "the name stays")
+    T.truthy(s.mock.tlsServers[PORT], "not before its answer has gone")
+    fire(s.mock, 2)
     T.eq(s.mock.tlsServers[PORT], nil)
     T.eq(s.mock.destroyedServers[#s.mock.destroyedServers], PORT)
     T.truthy(s.mock.servers[41999], "the API's own server stays")
@@ -878,20 +880,22 @@ function tests.an_os_without_the_private_key_says_it_is_not_supported()
     local answer = switch(s, true)
     T.eq(answer.status, 200)
     T.eq(answer.json.state, "error")
-    T.contains(answer.json.error, "not supported on this OS")
-    T.contains(s.mock.properties["Direct HTTPS Status"], "Error: not supported on this OS")
+    T.eq(answer.json.error, "This controller's OS is too old for Direct HTTPS. It needs OS 3.3.1 or later.")
+    T.eq(s.mock.properties["Direct HTTPS Status"], "Error: This controller's OS is too old for Direct HTTPS. It needs OS 3.3.1 or later")
+    T.contains(logText(s.mock), "gave no private key", "what Director did, in the log")
     T.eq(#httpsMessages(s), 0, "nothing asked without a key")
     T.eq(#s.mock.tlsCalls, 0)
 
     local missing = home({ prepare = function()
         C4.GenerateCSR_ECC = nil
     end })
-    T.contains(switch(missing, true).json.error, "not supported on this OS")
+    T.eq(switch(missing, true).json.error, "This controller's OS is too old for Direct HTTPS. It needs OS 3.3.1 or later.")
 
     local failing = home({ prepare = function(m)
         m.csrMode = "fail"
     end })
-    T.contains(switch(failing, true).json.error, "EC key generation failed")
+    T.eq(switch(failing, true).json.error, "The controller couldn't make its key.")
+    T.contains(logText(failing.mock), "EC key generation failed")
     -- Off and on again tries again.
     failing.mock.csrMode = nil
     switch(failing, false)
@@ -906,9 +910,22 @@ function tests.a_tls_server_that_fails_to_start_says_why()
     issued(s, asked)
     local current = status(s)
     T.eq(current.state, "error")
-    T.contains(current.error, "bind failed")
-    T.contains(s.mock.properties["Direct HTTPS Status"], "Error: the TLS server could not be started: bind failed")
+    T.eq(current.error, "The controller couldn't start its HTTPS server. Trying again in a minute.")
+    T.eq(s.mock.properties["Direct HTTPS Status"], "Error: The controller couldn't start its HTTPS server. Trying again in a minute")
     T.contains(logText(s.mock), "TLS server failed")
+    T.contains(logText(s.mock), "bind failed", "Director's words in the log")
+    -- Started again after 10 s, 30 s, a minute…: it works once the port is free.
+    T.eq(#s.mock.tlsCalls, 1)
+    fire(s.mock, 10)
+    T.eq(#s.mock.tlsCalls, 2)
+    T.truthy(hasTimer(s.mock, 30))
+    s.mock.tlsFails = nil
+    fire(s.mock, 30)
+    T.eq(#s.mock.tlsCalls, 3)
+    OnServerStatusChanged(PORT, "ONLINE", "https")
+    current = status(s)
+    T.eq(current.state, "listening")
+    T.eq(current.error, Json.null)
 end
 
 -- ---- requests on the TLS server -------------------------------------------------------------------
@@ -951,6 +968,211 @@ function tests.the_host_check_takes_the_name_only_on_the_tls_server()
     for _, host in ipairs({ name, name .. ":28443", name .. ":41999" }) do
         T.eq(T.http(mock, "GET", "/v1/health", { host = host }).status, 421, host)
     end
+end
+
+-- ---- what the app relies on (1.12.0 app) ----------------------------------------------------------
+
+function tests.the_system_always_says_direct_https()
+    local off = home({ allowed = false, remote = false })
+    local body = T.http(off.mock, "GET", "/v1/system", { key = off.key }).body
+    T.contains(body, '"direct_https":null', "the key is there, null, while off")
+    -- Whatever the module offers, the key stays.
+    require("src.api.direct_https").published = nil
+    T.contains(T.http(off.mock, "GET", "/v1/system", { key = off.key }).body, '"direct_https":null')
+end
+
+function tests.sealed_requests_on_the_tls_server_get_cors_for_the_app()
+    local s, asked = listening()
+    local mock, host = s.mock, asked.name .. ":28443"
+    local origin = "https://app.directorlink.io"
+    -- The preflight of the app's JSON POST.
+    local preflight = T.http(mock, "OPTIONS", "/v1/sealed", { tls = true, host = host, headers = {
+        Origin = origin, ["Access-Control-Request-Method"] = "POST", ["Access-Control-Request-Headers"] = "content-type",
+        ["Access-Control-Request-Private-Network"] = "true",
+    } })
+    T.eq(preflight.status, 204)
+    T.eq(preflight.headers["access-control-allow-origin"], origin)
+    T.contains(preflight.headers["access-control-allow-methods"], "POST")
+    T.contains(preflight.headers["access-control-allow-headers"], "Content-Type")
+    -- GET /v1/sealed: answered at once, in the same call (nothing waits on that path), with CORS.
+    local started = os.clock()
+    local info = T.http(mock, "GET", "/v1/sealed", { tls = true, host = host, headers = { Origin = origin } })
+    T.truthy(os.clock() - started < 0.5, "answered at once")
+    T.eq(info.status, 200)
+    T.eq(info.closed, true)
+    T.eq(info.headers["access-control-allow-origin"], origin)
+    T.eq(info.json.home, "lan")
+    -- POST /v1/sealed: a sealed request, answered sealed, with CORS.
+    local Lock = require("src.cloud.lock")
+    local me = T.http(mock, "GET", "/v1/api-keys/current", { key = s.key }).json
+    local lock = Lock.deviceKey(s.key)
+    local envelope = Lock.seal(lock, info.json.home, me.id, "req", Json.encode({ id = "tls-1", ts = info.json.time, method = "GET", path = "/v1/https" }))
+    local response = T.http(mock, "POST", "/v1/sealed", { tls = true, host = host, headers = { Origin = origin }, body = { envelope = envelope } })
+    T.eq(response.status, 200, response.body)
+    T.eq(response.headers["access-control-allow-origin"], origin)
+    local answer = Json.decode(Lock.open(lock, response.json.envelope, "res"))
+    T.eq(answer.status, 200)
+    T.eq(Json.decode(answer.body).state, "listening")
+end
+
+function tests.turned_off_over_the_tls_server_its_answer_goes_whole_before_the_server_stops()
+    local s, asked = listening()
+    local host = asked.name .. ":28443"
+    local answer = T.http(s.mock, "PUT", "/v1/https", { key = s.key, tls = true, host = host, body = { enabled = false } })
+    T.eq(answer.status, 200, answer.body)
+    T.eq(answer.json.state, "off")
+    T.eq(answer.closed, true, "the whole answer, then the connection closed")
+    T.truthy(s.mock.tlsServers[PORT], "the TLS server still runs when the answer is sent")
+    T.eq(s.mock.destroyedServers[#s.mock.destroyedServers] == PORT, false)
+    fire(s.mock, 2)
+    T.eq(s.mock.tlsServers[PORT], nil, "stopped 2 s later")
+    -- On again within the 2 s: it is not stopped.
+    local again = listening()
+    local againHost = status(again).name .. ":28443"
+    T.eq(T.http(again.mock, "PUT", "/v1/https", { key = again.key, tls = true, host = againHost, body = { enabled = false } }).status, 200)
+    T.eq(T.http(again.mock, "PUT", "/v1/https", { key = again.key, tls = true, host = againHost, body = { enabled = true } }).status, 200)
+    T.eq(hasTimer(again.mock, 2), false, "the stop was called off")
+    T.truthy(again.mock.tlsServers[PORT])
+    -- Composer's Off stops it at once (no request of the app's is on it).
+    setProperty("Direct HTTPS", "Off")
+    T.eq(again.mock.tlsServers[PORT], nil)
+end
+
+function tests.not_after_is_iso_8601_everywhere()
+    local s, _, _, notAfter = listening()
+    local pattern = "^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ$"
+    T.truthy(notAfter:match(pattern))
+    T.truthy(status(s).certificate.not_after:match(pattern), status(s).certificate.not_after)
+    T.eq(status(s).certificate.not_after, notAfter)
+    local system = T.http(s.mock, "GET", "/v1/system", { key = s.key }).json
+    T.truthy(system.direct_https.not_after:match(pattern), system.direct_https.not_after)
+    T.eq(system.direct_https.not_after, notAfter)
+end
+
+function tests.errors_are_short_sentences_for_the_owner()
+    local texts = {}
+    local function collect(s)
+        local text = status(s).error
+        T.truthy(type(text) == "string", "an error")
+        texts[#texts + 1] = text
+    end
+    for _, code in ipairs({ "HTTPS_UNAVAILABLE", "NOT_CLAIMED", "RATE_LIMITED", "ACME_FAILED", "DNS_FAILED", "ADDRESS_NEEDED",
+        "INVALID_REQUEST", "INTERNAL", "SOMETHING_NEW" }) do
+        local s = home()
+        local asked = turnOn(s)
+        relaySays(s, { type = "https_certificate_result", id = asked.id, ok = false, code = code })
+        collect(s)
+    end
+    local oldOs = home({ prepare = function(m)
+        m.csrMode = "csr_only"
+    end })
+    switch(oldOs, true)
+    collect(oldOs)
+    local noRemote = listening({ from = os.time() - 80 * DAY, to = os.time() + 10 * DAY })
+    setProperty("Remote Access", "Off")
+    collect(noRemote)
+    for _, text in ipairs(texts) do
+        T.truthy(#text <= 120, text)
+        T.truthy(text:match("^%u") and text:match("%.$"), "a sentence: " .. text)
+        T.truthy(not text:match("%u%u+_%u"), "no code: " .. text)
+        T.truthy(not text:find("C4:", 1, true), "nothing of Director's: " .. text)
+    end
+end
+
+function tests.a_handle_reused_after_a_tls_connection_never_takes_the_name_on_41999()
+    local s, asked = listening()
+    local mock, name = s.mock, asked.name
+    local handle = 9001
+    local function request(identifier)
+        mock.sent[handle], mock.closed[handle] = nil, nil
+        OnServerDataIn(handle, "GET /v1/health HTTP/1.1\r\nHost: " .. name .. "\r\n\r\n", "192.168.1.50", "50123", identifier)
+        return T.response(mock, handle).status
+    end
+    -- A TLS connection (a Director without identifiers: by its port) whose close was never told,
+    -- then a plain connection on 41999 with the same handle.
+    OnServerConnectionStatusChanged(handle, 28443, "ONLINE", "192.168.1.50")
+    OnServerConnectionStatusChanged(handle, 41999, "ONLINE", "192.168.1.51")
+    T.eq(request(nil), 421, "the mark went with its connection")
+    -- One that sent half a request first.
+    OnServerConnectionStatusChanged(handle, 28443, "ONLINE", "192.168.1.50")
+    OnServerDataIn(handle, "GET /v1/health HTTP/1.1\r\n", "192.168.1.50", "50123", nil)
+    OnServerConnectionStatusChanged(handle, 41999, "ONLINE", "192.168.1.51")
+    T.eq(request(nil), 421)
+    -- Closed: nothing left.
+    OnServerConnectionStatusChanged(handle, 28443, "ONLINE", "192.168.1.50")
+    OnServerConnectionStatusChanged(handle, 28443, "OFFLINE", "192.168.1.50")
+    T.eq(request(nil), 421)
+    -- A mark whose connection said nothing for longer than a stale connection lives.
+    OnServerConnectionStatusChanged(handle, 28443, "ONLINE", "192.168.1.50")
+    later(31, function()
+        T.eq(request(nil), 421)
+    end)
+    -- The TLS connection itself still takes it.
+    OnServerConnectionStatusChanged(handle, 28443, "ONLINE", "192.168.1.50")
+    T.eq(request(nil), 200)
+    T.eq(request("https"), 200)
+end
+
+function tests.a_tls_server_that_goes_offline_is_started_again()
+    local s = listening()
+    local calls = #s.mock.tlsCalls
+    OnServerStatusChanged(PORT, "OFFLINE", "https")
+    local current = status(s)
+    T.eq(current.state, "error")
+    T.eq(current.error, "The controller's HTTPS server stopped. Trying again in a minute.")
+    T.eq(T.http(s.mock, "GET", "/v1/system", { key = s.key }).json.direct_https, Json.null)
+    s.mock.tlsFails = "address in use"
+    fire(s.mock, 10)
+    T.eq(#s.mock.tlsCalls, calls + 1, "started again after 10 s")
+    T.eq(s.mock.destroyedServers[#s.mock.destroyedServers], PORT, "the old one by its port first")
+    T.eq(status(s).error, "The controller couldn't start its HTTPS server. Trying again in a minute.")
+    s.mock.tlsFails = nil
+    fire(s.mock, 30)
+    T.eq(#s.mock.tlsCalls, calls + 2, "then after 30 s")
+    OnServerStatusChanged(PORT, "ONLINE", "https")
+    T.eq(status(s).state, "listening")
+    T.eq(status(s).error, Json.null)
+    -- Started, and Director never says it is online: counts as not started.
+    OnServerStatusChanged(PORT, "OFFLINE", "https")
+    fire(s.mock, 10)
+    T.eq(status(s).state, "error")
+    fire(s.mock, 30)
+    T.truthy(hasTimer(s.mock, 30), "started again after the next wait")
+    T.eq(status(s).error, "The controller couldn't start its HTTPS server. Trying again in a minute.")
+    -- Off: nothing is started again.
+    switch(s, false)
+    fire(s.mock, 2)
+    T.eq(#httpsTimers(s.mock, false), 0)
+end
+
+function tests.a_new_certificate_that_cannot_start_the_server_leaves_the_old_one_running()
+    local now = os.time()
+    local s, _, oldLeaf, oldEnd = listening({ from = now - 50 * DAY, to = now + 40 * DAY })
+    later(21 * DAY, function()
+        tick(s.mock)
+        local renewal = httpsMessages(s)[1]
+        local newLeaf = certificateFor(renewal, { from = os.time(), serial = 2 })
+        s.mock.tlsRefuses = { [newLeaf] = "unusable certificate" }
+        local calls = #s.mock.tlsCalls
+        relaySays(s, { type = "https_certificate_result", id = renewal.id, ok = true, status = "issued", name = renewal.name,
+            certificate = newLeaf, chain = INTERMEDIATE, not_after = "x" })
+        T.eq(#s.mock.tlsCalls, calls + 2, "the new one tried, then the old one again")
+        T.eq(s.mock.tlsCalls[calls + 1].certificate, newLeaf)
+        T.eq(s.mock.tlsServers[PORT].certificate, oldLeaf, "the old certificate serves")
+        T.eq(stored(s.mock).certificate, oldLeaf, "and stays stored")
+        OnServerStatusChanged(PORT, "ONLINE", "https")
+        local current = status(s)
+        T.eq(current.state, "listening")
+        T.eq(current.certificate.not_after, oldEnd)
+        T.eq(current.error, "The new certificate couldn't start the HTTPS server. Trying again in 5 minutes.")
+        T.contains(logText(s.mock), "unusable certificate")
+        -- A good one later replaces it.
+        fire(s.mock, 300)
+        local again = httpsMessages(s)[1]
+        local good = issued(s, again, { from = os.time(), serial = 3 })
+        T.eq(s.mock.tlsServers[PORT].certificate, good)
+        T.eq(stored(s.mock).certificate, good)
+    end)
 end
 
 function tests.the_host_check_takes_no_name_before_there_is_one()

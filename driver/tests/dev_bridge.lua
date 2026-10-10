@@ -34,6 +34,9 @@
 -- Gate" (driver 161, the DoorBird's relay, a contact), 72 "Garage Door" (driver 162, two relays, no
 -- contact), the KNX relay 75 "Back Door Relay" that door controller 163 drives, and 74 "Side Gate"
 -- (nothing bound); "event 161 1" is the gate's controller saying Opened, "event 161 2" Closed.
+-- With both (scripts/dev_server.py --agreement-cameras --door-controllers), the doorbell camera 68
+-- "Entrance" has its gate (1.11.0, ADR-078): 76 "Entrance Gate", a Relay Gate Controller (driver
+-- 166) on the relay of the doorbell's driver 158, Mock.withDoorbellGate.
 -- With an argument "sonos" (scripts/dev_server.py --sonos), the driver's requests to Sonos
 -- players go out through the dev server to the fake players (tests/sonos/fake-sonos.mjs):
 --   out: "FETCH <hex JSON { method, url, headers, body_hex }>\n"
@@ -111,6 +114,9 @@ if agreementCameras then
 end
 if doorControllers then
     Mock.withRelayControllers(project)
+end
+if agreementCameras and doorControllers then
+    Mock.withDoorbellGate(project)
 end
 local mock = Mock.startDriver(project, specText, nil, function()
     Properties["Alarm Status"] = "On"

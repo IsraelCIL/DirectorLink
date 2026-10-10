@@ -231,6 +231,36 @@ function RelayController.shownAs(deviceId)
     return info and info.relay or nil
 end
 
+-- A doorbell's doors (1.11.0, ADR-078): the doors set up now whose controller's Open/Toggle relay is
+-- bound to a relay connection of the doorbell camera's own driver (the DirectorLink · DoorBird
+-- driver's "Relay 1", for one), or of the camera itself; every one when there are several. Their ids
+-- (the controller's button, or the KNX Contact/Relay it is shown as), sorted. Only a doorbell camera
+-- of the camera agreement (ADR-065): a DoorBird doorstation opens its gate with its own button, and
+-- a controller on its relay is its partner (survey). Nothing is asked of Director: the survey read
+-- the bindings.
+function RelayController.doorsAtDoorbell(registry, doorbell)
+    if type(doorbell) ~= "table" or not doorbell.camera_doorbell or not tonumber(doorbell.id) then
+        return {}
+    end
+    local providers = { [tonumber(doorbell.id)] = true }
+    local camera = registry and registry.getDevice and registry.getDevice(tonumber(doorbell.id)) or nil
+    for _, protocol in ipairs(type(camera) == "table" and camera.protocols or {}) do
+        if tonumber(protocol.id) then
+            providers[tonumber(protocol.id)] = true
+        end
+    end
+    local doors = {}
+    for id, info in pairs(surveyed) do
+        local openRelay = info.relays[1]
+        local door = info.relay or id
+        if openRelay and providers[openRelay] and tracked[door] then
+            doors[#doors + 1] = door
+        end
+    end
+    table.sort(doors)
+    return doors
+end
+
 local function unescape(text)
     return (text:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&"))
 end

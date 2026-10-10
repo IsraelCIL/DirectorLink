@@ -82,6 +82,13 @@ function remembered() {
   }
 }
 
+// The home and key id this browser gets alerts for (sealed to that key), or null while alerts are off
+// here: what the ring's doors kept for the service worker are about (js/doorbell-doors.js, 1.11.0).
+export function alertsHome() {
+  const saved = remembered();
+  return saved && /^[0-9a-f]{8}$/.test(saved.keyId || "") ? { home: saved.home, keyId: saved.keyId } : null;
+}
+
 function remember(value) {
   try {
     if (value) {
@@ -186,6 +193,8 @@ export function alertTexts() {
     other: t("alerts.other", { home }),
     doorbell_title: t("doorbells.notificationTitle"),
     doorbell: t("alerts.doorbell"),
+    // A ring's button where the browser shows them (1.11.0, ADR-078): it opens the doorbell's screen.
+    doorbell_open_door: t("alerts.openDoorAction"),
     door_opened: t("alerts.doorOpened"),
     door_opened_scene: t("alerts.doorOpenedScene"),
     door_opened_control4: t("alerts.doorOpenedControl4"),

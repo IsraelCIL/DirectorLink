@@ -53,6 +53,8 @@ const ASSETS = [
   "/js/controls.js",
   "/js/dom.js",
   "/js/doorbells.js",
+  "/js/doorbell-doors.js",
+  "/js/views/doorbell.js",
   "/js/fans.js",
   "/js/refrigerators.js",
   "/js/favorites.js",
@@ -208,8 +210,13 @@ self.addEventListener("activate", (event) => {
 // door was left open, a schedule failed). The words are the app's, in its language (js/alerts.js
 // keeps them here); English when there are none, and the general words when the detail is missing
 // or does not open. Every push shows a notification (browsers revoke a subscription that does not).
-// Tapping a doorbell's opens Home (its banner), a camera's its full view, a refrigerator's its room,
-// any other the home's history. The servers' push of a new device asking to join (1.8.0),
+// Tapping a doorbell's opens its own screen (1.11.0, ADR-078: its live picture and "Open <door>" for
+// the doors at it this user may open; Home's banner before), a camera's its full view, a
+// refrigerator's its room, any other the home's history. Where the browser shows a notification's
+// buttons (Android, desktop Chrome and Edge; not iPhone), a ring also has "Open <door>…" for each such
+// door (js/doorbell-doors.js keeps them here, by name, for this home and key): it opens the same
+// screen, never the door. A tap is also kept here for a minute (OPEN_PATH), so that an app this
+// opens, or one asleep when told, still lands where it leads (js/pwa.js). The servers' push of a new device asking to join (1.8.0),
 // { kind: "device_request", home, at, request }, says only that, and opens the app, where the
 // request shows under every screen's header. An ask-to-open link's request (1.8.0, ADR-058) asks
 // "Open the main gate?": its tap opens the app's question (#/open/<door>/<request>/<until>), where
@@ -217,6 +224,10 @@ self.addEventListener("activate", (event) => {
 const ALERT_TEXTS_CACHE = "directorlink-alerts";
 const ALERT_TEXTS_PATH = "/alert-texts.json";
 const ALERT_KEY_PATH = "/alert-key.json";
+const RING_DOORS_PATH = "/ring-doors.json";
+const OPEN_PATH = "/notification-open.json";
+// A ring's "Open <door>…" buttons, at most (browsers show one or two).
+const MAX_RING_ACTIONS = 2;
 const ALERT_TEXTS = {
   lang: "en",
   dir: "ltr",
@@ -227,6 +238,7 @@ const ALERT_TEXTS = {
   other: "Your home – something needs your attention. Open the app to see what happened.",
   doorbell_title: "Someone is at the door",
   doorbell: "{name} rang at {time}.",
+  doorbell_open_door: "Open {name}…",
   door_opened: "{name} was opened by {who} at {time}.",
   door_opened_scene: "{name} was opened by {who}, with the scene {scene}, at {time}.",
   door_opened_control4: "{name} was opened in Control4 at {time}.",
@@ -339,8 +351,9 @@ function sealedNotice(detail, texts, home) {
   switch (detail.kind) {
     case "doorbell":
       if (!name) return null;
-      // The same tag as the app's own notification of a ring (js/doorbells.js): one per doorbell.
-      return { title: texts.doorbell_title, body: fill(texts.doorbell, { name, time }), tag: `doorbell-${id}`, url: "/#/", ring: text(detail.at) };
+      // The same tag as the app's own notification of a ring (js/doorbells.js): one per doorbell. Its
+      // tap opens the doorbell's screen (1.11.0).
+      return { title: texts.doorbell_title, body: fill(texts.doorbell, { name, time }), tag: `doorbell-${id}`, url: id ? `/#/doorbell/${id}` : "/#/", ring: text(detail.at), doorbell: id };
     case "door_opened": {
       if (!name) return null;
       const by = detail.who || {};
@@ -391,8 +404,29 @@ async function appInFront() {
   }
 }
 
+// A ring's buttons, where the browser shows them: "Open <door>…" for each door at the doorbell this
+// user may open, as the app kept them for this home and key (js/doorbell-doors.js). Each opens the
+// doorbell's screen (its tap's address), where Open asks for its two taps; none opens a door.
+async function ringActions(alert, doorbellId, texts) {
+  const most = Math.min(Number(self.Notification?.maxActions) || 0, MAX_RING_ACTIONS);
+  if (most < 1 || !doorbellId) return [];
+  try {
+    const saved = await (await caches.open(ALERT_TEXTS_CACHE)).match(RING_DOORS_PATH);
+    const kept = saved ? await saved.json() : null;
+    if (!kept || kept.home !== alert.home || kept.key !== alert.key) return [];
+    const doors = kept.doorbells?.[doorbellId]?.doors;
+    return (Array.isArray(doors) ? doors : [])
+      .filter((door) => Number.isInteger(door?.id) && text(door.name))
+      .slice(0, most)
+      .map((door) => ({ action: `door-${door.id}`, title: fill(texts.doorbell_open_door, { name: door.name }) }));
+  } catch {
+    return [];
+  }
+}
+
 async function showNotice(notice, texts) {
   const options = { body: notice.body, tag: notice.tag, renotify: true, lang: texts.lang, dir: texts.dir, icon: "/icons/icon-192.png", data: { url: notice.url } };
+  if (notice.actions?.length) options.actions = notice.actions;
   if (notice.ring) {
     // A ring this device already shows (the app noticed it first), or one the app shows on its
     // banner now: the notification is still shown, as every push must be, but quietly, in place
@@ -421,6 +455,7 @@ async function showAlert(data) {
       const detail = await openSealed(alert);
       const notice = detail && sealedNotice(detail, texts, home);
       if (notice) {
+        if (notice.doorbell) notice.actions = await ringActions(alert, notice.doorbell, texts);
         await showNotice(notice, texts);
         return;
       }
@@ -471,20 +506,33 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   );
 });
 
-// A notification's tap: bring the app to the front where it says (a doorbell's: Home), or open it
-// there when no window is left.
+// Where a tap leads, kept a minute for the app (js/pwa.js takes it once): an app this opens, or one
+// asleep when told, still lands there.
+async function keepOpen(url) {
+  try {
+    const cache = await caches.open(ALERT_TEXTS_CACHE);
+    await cache.put(OPEN_PATH, new Response(JSON.stringify({ url, at: Date.now() }), { headers: { "content-type": "application/json" } }));
+  } catch {
+    // The message and the address still say it.
+  }
+}
+
+// A notification's tap, or one of its buttons (a ring's "Open <door>…": the same screen): bring the
+// app to the front where it says (a doorbell's: its screen), or open it there when no window is left.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = new URL(event.notification.data?.url || "/#/", self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
-      const client = windows.find((item) => new URL(item.url).origin === self.location.origin);
-      if (client) {
-        client.postMessage({ type: "directorlink-open", url });
-        return client.focus();
-      }
-      return self.clients.openWindow(url);
-    })
+    keepOpen(url)
+      .then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true }))
+      .then((windows) => {
+        const client = windows.find((item) => new URL(item.url).origin === self.location.origin);
+        if (client) {
+          client.postMessage({ type: "directorlink-open", url });
+          return client.focus();
+        }
+        return self.clients.openWindow(url);
+      })
   );
 });
 

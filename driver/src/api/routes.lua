@@ -115,6 +115,9 @@ return {
     { method = "GET", path = "/v1/doorbells", handler = "doorbells.list", role = "member" },
     { method = "GET", path = "/v1/doorbells/{doorbellId}", handler = "doorbells.get", role = "member" },
     { method = "POST", path = "/v1/doorbells/{doorbellId}/open", handler = "doorbells.open", role = "member" },
+    -- The doors and gates an admin links to a doorbell (1.11.0, ADR-078); each still opened with
+    -- its own Open, by those who may open it.
+    { method = "PUT", path = "/v1/doorbells/{doorbellId}/doors", handler = "doorbells.set_doors", role = "admin" },
 
     -- Samsung refrigerators (ADR-049): read and switched by those given refrigerators (ADR-054).
     { method = "GET", path = "/v1/refrigerators", handler = "refrigerators.list", role = "member" },

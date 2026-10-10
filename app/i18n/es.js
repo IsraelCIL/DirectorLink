@@ -376,6 +376,23 @@ export default {
     },
     notificationTitle: "Hay alguien en la puerta",
     notificationBody: "{name} sonó.",
+    // A doorbell's doors and its own screen (1.11.0, ADR-078).
+    openDoor: "Abrir {name}",
+    screenTitle: "Timbre",
+    screenLink: "Pantalla del timbre",
+    notFoundTitle: "Timbre no encontrado",
+    notFoundText: "Puede que se haya eliminado del proyecto de Control4.",
+    links: {
+      title: "Puertas y portones de este timbre",
+      help: "Cuando suena, su pantalla y el aviso de Inicio muestran Abrir para cada uno, a quien pueda abrir esa puerta. Un portón cuyo controlador está en el relé del propio timbre aparece aquí solo.",
+      automatic: "En el relé del timbre",
+      manual: "Añadido aquí",
+      none: "Aún no hay ninguna puerta ni portón aquí.",
+      add: "Añadir una puerta o un portón",
+      addButton: "Añadir",
+      remove: "Quitar",
+      removeLabel: "Quitar {name} de este timbre",
+    },
   },
   // The alarm, read-only (ADR-038): for members and admins, once the installer turned it on.
   alarm: {
@@ -1306,6 +1323,8 @@ export default {
     scheduleFailedNamed: "{home} – la programación de {name} tuvo un problema a las {time}. Abre la app para ver qué pasó.",
     other: "{home} – algo requiere tu atención. Abre la app para ver qué pasó.",
     doorbell: "{name} sonó a las {time}.",
+    // A ring's button where the browser shows them (1.11.0): it opens the doorbell's screen.
+    openDoorAction: "Abrir {name}…",
     doorOpened: "{who} abrió {name} a las {time}.",
     doorOpenedScene: "{who} abrió {name} con la escena {scene} a las {time}.",
     doorOpenedControl4: "Se abrió {name} desde Control4 a las {time}.",
@@ -1545,6 +1564,7 @@ export default {
     linkGone: "La escena se eliminó",
     answered: "En respuesta al enlace “{label}”",
     answeredUnnamed: "En respuesta a un enlace “Preguntar antes de abrir”",
+    fromDoorbell: "Desde el timbre {name}",
   },
   palettes: {
     graphite: "Grafito",
@@ -1942,6 +1962,7 @@ export default {
       roomOrder: "Habitaciones en el orden de la casa",
       sonosRooms: "Reproductores Sonos con una habitación elegida",
       sceneLinks: "Escenas con enlace para automatizaciones",
+      doorbellDoors: "Puertas y portones añadidos a timbres",
       yoursAdded: "Este dispositivo conserva su acceso (se emparejó después de hacer la copia de seguridad).",
       keysKept: "Claves: se quedan como están ahora. Cada dispositivo conserva el acceso que tiene ahora y no vuelve ninguna de las claves de la copia, así que un dispositivo quitado desde entonces sigue fuera.",
       keysBack: "Claves que vuelven",
@@ -2002,6 +2023,7 @@ export default {
       roomNames: "nombres de las habitaciones",
       roomOrder: "el orden de las habitaciones",
       sonosRoom: "el reproductor Sonos “{name}”",
+      doorbellDoors: "las puertas del timbre “{name}”",
       personRooms: "habitaciones de {name}",
       hiddenRooms: "las habitaciones ocultas a los miembros",
     },

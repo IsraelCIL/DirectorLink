@@ -2441,7 +2441,11 @@ paths:
         ask-to-open link made: the pulse then answers it, with the same checks as any opening, and
         only from a device the request was sent to, within its two minutes (409
         `OPEN_REQUEST_EXPIRED` otherwise, and nothing opens), once (409 `OPEN_REQUEST_ANSWERED`).
-        History names the link with the opening. Any other body is ignored, as before.
+        History names the link with the opening. Since 1.11.0 (ADR-078) the body may carry
+        `doorbell`, the doorbell whose ring screen or banner the door was opened from (one of its
+        `doors`): an ordinary opening of this door, with the same checks, which History says came from
+        that doorbell (`ids.doorbell_id`, its name in `note`); a doorbell the door is not at is
+        ignored. Any other body is ignored, as before.
       requestBody:
         required: false
         content:
@@ -2525,7 +2529,9 @@ paths:
         Composer, and a person who opens doors and gates (ADR-054: else 403 `FORBIDDEN`). Every
         request is written to the log with the API key used. A doorbell that cannot open anything
         (`can_open` false: a DoorBird without its button, a doorbell camera, ADR-065) answers 409
-        `NOT_SUPPORTED`, before Door Control and the caller's permissions are looked at.
+        `NOT_SUPPORTED`, before Door Control and the caller's permissions are looked at. The doors at a
+        doorbell (`doors`, 1.11.0, ADR-078) are opened with their own Open, `POST
+        /v1/relays/{relayId}/pulse`, never through this.
       responses:
         "202":
           description: Button pressed. The body is the doorbell as last reported.
@@ -2545,6 +2551,51 @@ paths:
           $ref: "#/components/responses/Conflict"
         "502":
           $ref: "#/components/responses/CommandFailed"
+
+  /v1/doorbells/{doorbellId}/doors:
+    parameters:
+      - $ref: "#/components/parameters/DoorbellId"
+    put:
+      tags: [Doorbells]
+      operationId: setDoorbellDoors
+      x-directorlink-role: admin
+      summary: Link doors and gates to the doorbell
+      description: |
+        1.11.0 (ADR-078). The doors and gates an admin shows at a doorbell besides those found by
+        themselves (a Relay Door, Gate or Garage Door Controller whose Open/Toggle relay is bound to a
+        relay connection of the doorbell camera's own driver): a gate not wired through the doorbell,
+        such as a KNX relay. Replaces the doors linked before; at most 10; each a door or gate
+        `GET /v1/relays` lists (else 400 `INVALID_FIELD`). Kept on the controller and in backups. A
+        link opens nothing and gives nobody a door: each door keeps its own Open, for those who may
+        open it. 409 `DOORBELL_LINK_LIMIT_REACHED` when 50 doorbells have links already; 503
+        `UNAVAILABLE` when the links could not be read at start or saved now (nothing changes).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DoorbellDoorsUpdate"
+            example:
+              door_ids: [70]
+      responses:
+        "200":
+          description: The doorbell with its doors now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Doorbell"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 
   /v1/refrigerators:
     get:
@@ -4940,6 +4991,23 @@ components:
           type: string
           pattern: "^[0-9a-f]{16}$"
           description: An open request's id, from the sealed alert an ask-to-open link made (1.8.0, ADR-058).
+        doorbell:
+          type: integer
+          minimum: 1
+          description: The doorbell whose ring screen or banner this door was opened from (1.11.0, ADR-078), for the history only; it opens nothing and changes no check.
+
+    DoorbellDoorsUpdate:
+      type: object
+      required: [door_ids]
+      additionalProperties: false
+      properties:
+        door_ids:
+          type: array
+          maxItems: 10
+          description: The doors and gates (ids from `GET /v1/relays`) an admin links to the doorbell, replacing those linked before; `[]` removes them. One found by itself (`link` automatic) is at the doorbell already and is not kept again.
+          items:
+            type: integer
+            minimum: 1
 
     SceneRun:
       type: object
@@ -5899,7 +5967,7 @@ components:
 
     Doorbell:
       type: object
-      required: [id, name, room, camera, can_open, connected, last_ring_at, last_motion_at, last_opened_at, last_access_at, events]
+      required: [id, name, room, camera, can_open, connected, last_ring_at, last_motion_at, last_opened_at, last_access_at, events, doors]
       properties:
         id:
           type: integer
@@ -5922,7 +5990,30 @@ components:
             - type: "null"
         can_open:
           type: boolean
-          description: True when `POST …/open` can press the doorbell's button.
+          description: True when `POST …/open` can press the doorbell's button. The doors at the doorbell (`doors`) are not this button's.
+        doors:
+          type: array
+          description: |
+            1.11.0 (ADR-078): the doors and gates at this doorbell, each once: first those found by
+            themselves (`automatic`: a Relay Door, Gate or Garage Door Controller whose Open/Toggle
+            relay is bound to a relay connection of the doorbell camera's own driver, every one when
+            there are several; only for doorbell cameras of the camera agreement, ADR-065), then those
+            an admin linked (`manual`, `PUT …/doors`). Only doors the caller sees. Each is opened
+            with its own Open (`POST /v1/relays/{relayId}/pulse`, `doorbell` in the body for the
+            history); `can_open` says whether the caller may open it now (doors and gates in their
+            permissions, its room among theirs, and Door Control on). Missing before 1.11.0.
+          items:
+            type: object
+            required: [id, link, can_open]
+            properties:
+              id:
+                type: integer
+                description: The door's id in `GET /v1/relays`.
+              link:
+                type: string
+                enum: [automatic, manual]
+              can_open:
+                type: boolean
         connected:
           type: [boolean, "null"]
           description: False after the doorbell driver reported a communication failure; null until the first event, and always for a doorbell camera (ADR-065).
@@ -7114,6 +7205,8 @@ components:
           devices; or, with `outcome` skipped, `reason` `nobody` (no device of theirs had alerts on),
           `doors_off` (Door Control off) or `not_sent`. The opening that answers it is `door`
           `pulse` by the key that answered, with `ids.link_id` and the label in `note`.
+        - A door opened from a doorbell's ring screen or banner (1.11.0, ADR-078) is `door` `pulse`
+          by that key, with `ids.doorbell_id` and the doorbell's name in `note`.
           `access` `ask_link_created`, `ask_link_replaced`, `ask_link_removed` (`what` is the door,
           `note` the label; `reason` `key_gone`, `no_access` when its person may no longer open the
           door, `door_gone`, `other_home`, or none when someone removed it).
@@ -7241,6 +7334,9 @@ components:
               type: string
             link_id:
               type: string
+            doorbell_id:
+              type: integer
+              description: A door opened from this doorbell's ring screen or banner (1.11.0, ADR-078); `note` is the doorbell's name.
         changes:
           type: array
           items:
@@ -7492,6 +7588,20 @@ components:
                   type: array
                   items:
                     type: integer
+            doorbell_doors:
+              type: object
+              description: The doors and gates an admin linked to doorbells (1.11.0, ADR-078). Each doorbell and door comes back only onto the device with the same id and the same name, never another; a backup without them (before 1.11.0) leaves the links on the controller as they are.
+              required: [version, links]
+              properties:
+                version:
+                  type: integer
+                links:
+                  type: object
+                  description: Doorbell id to the ids of the doors linked to it.
+                  additionalProperties:
+                    type: array
+                    items:
+                      type: integer
 
     AutomaticBackupKey:
       type: object
@@ -7728,6 +7838,9 @@ components:
             people:
               type: integer
               description: People with a role of their own after the restore (1.8.0, ADR-054); the others are worked out from their keys' roles afterwards.
+            doorbell_doors:
+              type: [integer, "null"]
+              description: Doors linked to doorbells after the restore (1.11.0, ADR-078); null when the backup has none, and the links stay as they are.
         left_out:
           type: object
           description: What the backup has that is left out, not valid or with nothing left to act on (steps whose devices or room match nothing, schedules whose scene is not in the backup).
@@ -7881,10 +7994,10 @@ components:
                       properties:
                         section:
                           type: string
-                          enum: [scenes, profiles, room_names, room_order, sonos_rooms]
+                          enum: [scenes, profiles, room_names, room_order, sonos_rooms, doorbell_doors]
                         name:
                           type: [string, "null"]
-                          description: The scene's or profile's name, or the Sonos player's.
+                          description: The scene's or profile's name, the Sonos player's, or the doorbell's (doorbell_doors, 1.11.0).
             unmatched_count:
               type: integer
         composer:

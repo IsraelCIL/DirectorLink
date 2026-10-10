@@ -5,6 +5,7 @@ local Views = require("src.api.views")
 local Activity = require("src.core.activity")
 local Access = require("src.auth.access")
 local AskLinkHandlers = require("src.api.handlers.ask_links")
+local DoorbellHandlers = require("src.api.handlers.doorbells")
 
 -- How the history names what a relay was told (a relay held closed holds its door open).
 local HISTORY = { pulse = "pulse", close = "hold", open = "release" }
@@ -27,7 +28,8 @@ local function findRelay(ctx)
 end
 
 -- `answering`: an ask-to-open link's request this pulse answers (ADR-058): { link_id, note, done }.
-local function run(ctx, device, action, answering)
+-- `doorbell`: the doorbell whose screen or ring banner it came from (1.11.0, ADR-078): { id, name }.
+local function run(ctx, device, action, answering, doorbell)
     -- Seen but not theirs to open: 403, as for the doors role of 1.7.0 (ADR-054).
     if not Access.canOpen(ctx.apiKey, device) then
         return Problem.new(403, "FORBIDDEN", "Opening doors and gates is not among this person's permissions")
@@ -56,14 +58,21 @@ local function run(ctx, device, action, answering)
         key_id = ctx.apiKey and ctx.apiKey.id or Json.null,
         client = ctx.client and ctx.client.ip or Json.null,
         link_id = answering and answering.link_id or nil,
+        doorbell_id = doorbell and doorbell.id or nil,
     })
     Activity.record("door", HISTORY[action], {
         by = ctx.apiKey,
         what = device.name,
         room = device.room_name,
-        -- Opened in answer to an ask-to-open link: its label, and its id.
-        note = answering and answering.note or nil,
-        ids = { device_id = device.id, room_id = device.room_id, link_id = answering and answering.link_id or nil },
+        -- Opened in answer to an ask-to-open link: its label, and its id; from a doorbell's screen
+        -- or ring banner: the doorbell's name, and its id.
+        note = answering and answering.note or doorbell and doorbell.name or nil,
+        ids = {
+            device_id = device.id,
+            room_id = device.room_id,
+            link_id = answering and answering.link_id or nil,
+            doorbell_id = doorbell and doorbell.id or nil,
+        },
     })
     return 202, Views.relay(ctx.services.registry, device)
 end
@@ -109,21 +118,26 @@ function Relays.update(ctx)
 end
 
 -- POST, optionally with {"request": "<id>"}: the answer to an ask-to-open link's request (ADR-058),
--- from a device it was sent to, only while it lasts and once (src/api/handlers/ask_links.lua). Any
--- other body is ignored, as before.
+-- from a device it was sent to, only while it lasts and once (src/api/handlers/ask_links.lua). With
+-- {"doorbell": <id>} (1.11.0, ADR-078) it is opened from that doorbell's screen or ring banner: an
+-- ordinary opening of this door, checked as any, that the history says came from the doorbell when
+-- the door is one of that doorbell's (else it says nothing of it). Any other body is ignored, as
+-- before.
 function Relays.pulse(ctx)
     local device, problem = findRelay(ctx)
     if not device then
         return problem
     end
-    local answering
+    local answering, doorbell
     if type(ctx.body) == "table" and ctx.body.request ~= nil and ctx.body.request ~= Json.null then
         answering, problem = AskLinkHandlers.claim(ctx, device, ctx.body.request)
         if not answering then
             return problem
         end
+    elseif type(ctx.body) == "table" and ctx.body.doorbell ~= nil and ctx.body.doorbell ~= Json.null then
+        doorbell = DoorbellHandlers.at(ctx, device, ctx.body.doorbell)
     end
-    return run(ctx, device, "pulse", answering)
+    return run(ctx, device, "pulse", answering, doorbell)
 end
 
 return Relays

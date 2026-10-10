@@ -33,6 +33,7 @@ import { commandRouteChanged, commandSignature } from "./js/views/command.js";
 import { climateView } from "./js/views/climate.js";
 import { favoritesPicker, homeView } from "./js/views/home.js";
 import { roomView } from "./js/views/room.js";
+import { doorbellView, enterDoorbell } from "./js/views/doorbell.js";
 import { resetSceneEditor, sceneEditorView, sceneReturnKey, scenesView } from "./js/views/scenes.js";
 import { leaveSceneLink, sceneLinksView, sceneLinkView } from "./js/views/scene-links.js";
 import { askLinkView, leaveAskLink, leaveOpenRequest, openRequestView } from "./js/views/ask-links.js";
@@ -64,6 +65,10 @@ function parseRoute() {
   }
   if (parts[0] === "room" && /^\d+$/.test(parts[1] || "")) {
     return { name: "room", id: Number(parts[1]), tab: "home" };
+  }
+  // A doorbell's screen (1.11.0, ADR-078): where its ring's notification opens the app.
+  if (parts[0] === "doorbell" && /^\d+$/.test(parts[1] || "")) {
+    return { name: "doorbell", id: Number(parts[1]), tab: "home" };
   }
   // A scene's link for the phone's own automations, and the list of them (ADR-051).
   if (parts[0] === "scene" && /^[0-9a-f]{8}$/.test(parts[1] || "") && parts[2] === "link") {
@@ -141,6 +146,8 @@ window.addEventListener("hashchange", () => {
   if ((route.name === "schedules" || route.name === "schedule") && previous.name !== "schedules" && previous.name !== "schedule") enterSchedules();
   // The Hebrew date on Home (Schedules reads the calendar too).
   if (route.name === "home" && previous.name !== "home") loadCalendar();
+  // A ring's screen opened before the doorbells are read: its picture at once.
+  if (route.name === "doorbell" && (previous.name !== "doorbell" || previous.id !== route.id)) enterDoorbell(route.id);
   // Sonos: Home and a room are read every 5 s while shown.
   musicRouteChanged(route);
   // Say or type a command: away from Home, Home's microphone stops, and nothing it heard is done.
@@ -303,6 +310,8 @@ function signature() {
     ui.editFavorites,
     ui.relayStage,
     ui.doorbellStage,
+    // A doorbell's screen (1.11.0): an admin linking doors, its picture asked for early.
+    route.name === "doorbell" ? [ui.doorbellLinks, ui.ringCamera] : 0,
     ui.tick,
     ui.roomMessages,
     ui.controllerMessage,
@@ -356,6 +365,8 @@ function screen() {
   switch (route.name) {
     case "room":
       return roomView(route.id, actions);
+    case "doorbell":
+      return doorbellView(route.id, actions);
     case "scenes":
       return scenesView(actions);
     case "schedules":
@@ -457,8 +468,9 @@ function render(force = false) {
 
   const saved = captureUi();
   const content = [screen()].flat(Infinity).filter(Boolean);
-  // Away from Home, a ring still shows: one line under the header that leads to the banner.
-  if (route.name !== "home" && state.apiKey) {
+  // Away from Home, a ring still shows: one line under the header that leads to the banner (not on
+  // the doorbell's own screen, which shows it).
+  if (route.name !== "home" && route.name !== "doorbell" && state.apiKey) {
     const notice = ringNotice(ringingDoorbells());
     if (notice) content.splice(1, 0, notice);
   }
@@ -535,6 +547,8 @@ async function start() {
   watchDeviceRequests();
   // The host and API key are kept in this browser, so a reload reconnects without pairing again.
   if (reachable()) {
+    // Opened on a doorbell's screen (a ring's notification): its picture is asked for with the rest.
+    if (route.name === "doorbell") enterDoorbell(route.id);
     connect();
   }
 }

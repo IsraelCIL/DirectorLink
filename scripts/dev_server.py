@@ -53,6 +53,10 @@ join the project: 71 "Main Gate" (a gate whose controller, driver 161, drives th
 and has a contact), 72 "Garage Door" (driver 162, two relays, no contact), the KNX relay 75 "Back Door
 Relay" as the door of controller 163, and 74 "Side Gate" (nothing bound, not listed). "event 161 1"
 is the gate's controller saying Opened, "event 161 2" Closed, "event 161 3" Partial.
+With both --agreement-cameras and --door-controllers (1.11.0, ADR-078), the doorbell camera 68
+"Entrance" has its gate: 76 "Entrance Gate", a Relay Gate Controller (driver 166) whose Open relay is
+bound to the doorbell's driver 158, as the owner's gate is bound to his DoorBird's relay; "ring 158"
+then shows the Entrance's ring with "Open Entrance Gate".
 """
 
 import argparse

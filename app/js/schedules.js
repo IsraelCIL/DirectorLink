@@ -5,7 +5,7 @@
 
 import { currentLanguage, formatClock, formatTemperature, t } from "./i18n.js";
 import { api, errorText } from "./session.js";
-import { notify, state } from "./state.js";
+import { can, notify, state } from "./state.js";
 import { fromCelsius, projectScale } from "./temperature.js";
 
 // The scale outside temperatures are shown in: the project's (1.10.2, ADR-076). Thresholds and
@@ -20,8 +20,22 @@ export const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 export const WORK_DAYS = [0, 1, 2, 3, 4];
 export const WEEKEND = [5, 6];
 
+// With DirectorLink 1.8.0 schedules are the admins' (ADR-054): a member's app shows none. The
+// members of an older controller still see them.
+export function membersHaveNoSchedules() {
+  return state.system?.features?.people_permissions === true && !can("admin");
+}
+
+// Whether to ask the controller for schedules, and for what Schedules shows with them: only once
+// this key's permissions are known (connecting reads them first, and then asks: app.js), and never
+// for a member, whom the controller would refuse (1.10.3).
+export function schedulesWanted() {
+  return state.loaded && !membersHaveNoSchedules();
+}
+
 // After connecting and every minute. Drivers before 0.14.0 have none.
 export async function loadSchedules() {
+  if (!schedulesWanted()) return;
   try {
     const answer = await api("/v1/schedules");
     state.schedules = Array.isArray(answer?.items) ? answer.items : [];

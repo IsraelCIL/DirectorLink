@@ -117,6 +117,15 @@ Italian); any other label is said as "Alert".
 | `Tamper`, `Scene Change` | Tampering, View changed |
 | `Object Left`, `Object Removed` | Object left behind, Object removed |
 | `Alarm Input`, `PIR` | Alarm input, Motion (PIR) |
+| `Smoke Alarm`, `CO Alarm` | Smoke alarm, CO alarm (sent even right after another alert: below) |
+| `Siren`, `Burglar Alarm` | Siren, Burglar alarm |
+| `Glass Break`, `Car Horn` | Glass breaking, Car horn |
+| `Baby Crying`, `Speech`, `Barking` | Baby crying, Someone talking, Dog barking |
+
+The sounds (from `Smoke Alarm` to `Barking`, DirectorLink 1.11.0 and later) are what a camera
+hears, as the DirectorLink · UniFi Protect driver names them; DirectorLink 1.10.x says them as
+"Alert". One label an alert: when a camera heard several sounds at once, give the most urgent
+(`Smoke Alarm`, then `CO Alarm`); `Smoke Alarm, Siren` is no label.
 
 ## How DirectorLink uses it
 
@@ -128,7 +137,10 @@ Italian); any other label is said as "Alert".
   minutes, its events too. Refresh Project reads everything again at once.
 - **Alerts.** "Person at Garden at 21:14", on the phones and computers that switched on camera alerts
   (off until chosen) and whose user may see that camera's pictures. At most one alert a camera a
-  minute, and 30 camera alerts an hour in the home, so that rings always get through. The driver
+  minute, and 30 camera alerts an hour in the home, so that rings always get through. A smoke or CO
+  alarm (1.11.0) is not held back by the camera's other alerts: at most one of each a camera a
+  minute, whatever else that camera alerted about, and 10 an hour in the home of their own, apart
+  from the 30. The driver
   decides what is worth an alert (its own settings, schedules and snooze): DirectorLink passes on its
   `Alert`, not every detection.
 - **Doorbells.** A `doorbell` is listed with the doorbells as well as with the cameras, under the
@@ -140,14 +152,25 @@ Italian); any other label is said as "Alert".
   before) and from two minutes behind the controller's clock to five seconds ahead of it; else the
   moment the event came, so a `Ring` without a new `LAST_RING` is still a new ring. After
   DirectorLink restarts, its last ring is `LAST_RING`, unless that is ahead of the controller's clock.
-- **A gate or door at a doorbell.** A doorbell camera opens nothing in DirectorLink (`can_open`
-  false; `POST /v1/doorbells/{id}/open` answers `409 NOT_SUPPORTED`). If the doorbell has a relay of
-  its own (a door strike, a gate), give the driver a Control4 relay connection and have the installer
-  bind it in Composer to a Relay Door or Gate Controller, so that Control4's apps and programming
-  open it. DirectorLink 1.10.0 shows that controller as a door or gate of its own, in its room, and
-  opens it with the controller's Open (ADR-069): a relay connection must take the controller's
-  `CLOSE` (and `TRIGGER`, `TOGGLE`) as one pulse, never a hold, as the DirectorLink · DoorBird driver
-  does. Opening from a doorbell camera's banner is for a later version of the agreement.
+- **A gate or door at a doorbell.** A doorbell camera itself opens nothing in DirectorLink
+  (`can_open` false; `POST /v1/doorbells/{id}/open` answers `409 NOT_SUPPORTED`). If the doorbell
+  has a relay of its own (a door strike, a gate), give the driver a Control4 relay connection and have
+  the installer bind it in Composer to a Relay Door, Gate or Garage Door Controller's Open/Toggle
+  relay, so that Control4's apps and programming open it. DirectorLink 1.10.0 shows that controller as
+  a door or gate of its own, in its room, and opens it with the controller's Open (ADR-069): a relay
+  connection must take the controller's `CLOSE` (and `TRIGGER`, `TOGGLE`) as one pulse, never a hold,
+  as the DirectorLink · DoorBird driver does.
+- **That gate at the ring (DirectorLink 1.11.0, ADR-078).** A controller whose Open/Toggle relay is
+  bound to a relay connection of the doorbell camera's own driver is that doorbell's door, found by
+  DirectorLink from the binding alone (every one, when several are). The ring's notification opens
+  the doorbell's screen in the app, with its live picture and a big "Open <door>" (the door's own
+  Open, two taps, for whoever may open that door); Home's ring banner has the same button, and
+  Android and desktop browsers show "Open <door>…" on the notification (it opens the screen, never
+  the gate). **Nothing new is asked of the driver: the agreement stays version 1.** The relay
+  connection and its binding are what they were for Control4; DirectorLink reads what Composer bound
+  (`C4:GetBoundProviderDevice`), which also counts a binding Director reports on the camera proxy.
+  A gate not wired through the doorbell (a KNX relay, another relay module) can be added at the
+  doorbell by an admin in the app.
 - **Privacy.** Names, rooms and what a camera saw stay on the controller: an alert is sealed on the
   controller for each phone, and DirectorLink's servers only pass it on (see
   [`ACCOUNTS.md`](ACCOUNTS.md)). Pictures go from the camera to the controller and, sealed, to the app.
@@ -156,6 +179,9 @@ Italian); any other label is said as "Alert".
 
 - **Alert on every motion.** Fire `Alert` once per alert, not again while it lasts, and only for what
   the user asked for: the home's alerts are limited, and a busy camera crowds out the others.
+- **Hold back a smoke or CO alarm** behind another alert of the camera: fire `Alert` with
+  `Smoke Alarm` or `CO Alarm` even while another of its alerts lasts (its hold time):
+  DirectorLink sends it even right after the camera's other alerts.
 - **Fire `Ring` for anything but a press** of a doorbell's button, or from a driver whose kind is
   `camera`.
 - **Put names, addresses or other personal data in `LAST_ALERT`.** It is a label from the list.
@@ -172,6 +198,7 @@ Italian); any other label is said as "Alert".
 
 | DirectorLink | Camera drivers |
 | --- | --- |
+| 1.11.0 and later | The sounds among the labels (`Smoke Alarm` … `Barking`); a smoke or CO alarm is not held back by the camera's other alerts (ADR-080). A Relay Door, Gate or Garage Door Controller on the driver's relay connection is the doorbell's door (ADR-078). The agreement stays version 1. |
 | 1.10.0 and later | The agreement, version 1, with `DIRECTORLINK_CAMERA_EVENTS`. A driver that says a later version is read as version 1 (a later version only adds). |
 | 1.8.0 to 1.9.x | Only the DirectorLink · Hikvision Camera driver, by its file name (`DirectorLink-Hikvision-Camera.c4z`), its event 1 and `LAST_ALERT`. Other cameras: pictures only; a doorbell camera is a camera. |
 
@@ -191,6 +218,10 @@ does not set the marker; once it does, by the marker only, never twice.
   camera driver's events`: its size, how many events, their names).
 - Without a controller: `python scripts/dev_server.py --agreement-cameras` runs DirectorLink against
   a fake Director with two made-up drivers of the agreement, a camera (driver 157) and a doorbell
-  (driver 158); type `alert 157 Animal` or `ring 158`.
+  (driver 158); type `alert 157 Animal` or `ring 158`. With `--door-controllers` too, the doorbell
+  has its gate, a Relay Gate Controller on driver 158's relay (76 "Entrance Gate").
+- DirectorLink's log says, at each project read, `door controller set up` for the gate (its
+  controller and bindings), and `GET /v1/doorbells/{id}` lists the gate in `doors` with `link`
+  `automatic`.
 
-The decision and its details are ADR-065 in [`DECISIONS.md`](DECISIONS.md).
+The decision and its details are ADR-065 in [`DECISIONS.md`](DECISIONS.md); the sounds, ADR-080.

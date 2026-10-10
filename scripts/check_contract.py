@@ -258,6 +258,12 @@ class Client:
 KITCHEN, LIVING, BEDROOM, TV = "RINCON_000E58A0000101400", "RINCON_000E58A0000201400", "RINCON_000E58A0000301400", "RINCON_000E58A0000401400"
 
 
+# Control4's own Sonos drivers (1.11.0, ADR-080, the dev bridge's "c4sonos"): 84 to 87 are Sonos
+# drivers' devices, 88 Sonance's.
+def music_parts(client):
+    return {item["id"]: item["part_of_music"] for item in client.check("GET", "/v1/devices", 200)["items"] if 84 <= item["id"] <= 88}
+
+
 def sonos(client, bridge):
     """Sonos (1.5.0, ADR-044) with the fake players of tests/sonos/fake-sonos.mjs (Kitchen leads
     Living Room and plays a track, Bedroom plays the radio, TV Room is paused in Spotify Connect):
@@ -270,10 +276,16 @@ def sonos(client, bridge):
     if client.check("POST", f"/v1/music/{KITCHEN}/play", 409)["code"] != "SONOS_OFF":
         fail("a command with Sonos Off should be refused with SONOS_OFF")
     client.check("POST", "/v1/scenes/try", 202, body={"steps": [{"type": "music", "room_id": None, "set": {"action": "pause"}}]})
+    if music_parts(client) != {84: False, 85: False, 86: False, 87: False, 88: False}:
+        fail(f"with Sonos Off, Control4's Sonos drivers' devices should be devices of their own: {music_parts(client)}")
 
     bridge.set_property("Sonos", "On")
     if client.check("GET", "/v1/system", 200)["features"]["sonos"] is not True:
         fail("GET /v1/system should say that Sonos is on")
+    if music_parts(client) != {84: True, 85: True, 86: True, 87: True, 88: False}:
+        fail(f"with Sonos On, Control4's Sonos drivers' devices should be part of Music: {music_parts(client)}")
+    if not client.check("GET", "/v1/devices/85", 200)["part_of_music"]:
+        fail("GET /v1/devices/85 should be part of Music")
     music = client.check("GET", "/v1/music", 200)
     rooms = {item["id"]: item for item in music["items"]}
     if music["status"] != "ok" or sorted(rooms) != sorted([KITCHEN, LIVING, BEDROOM, TV]):
@@ -526,6 +538,21 @@ def scenario(client, bridge):
     if {"id": 68, "type": "doorbell"} not in [{"id": item["id"], "type": item["type"]} for item in client.check("GET", "/v1/devices?type=doorbell", 200)["items"]]:
         fail("GET /v1/devices?type=doorbell should list the doorbell camera as a doorbell")
     client.check("POST", "/v1/doorbells/68/open", 409)
+    # The doorbell's gate (1.11.0, ADR-078): the dev bridge's 76 Entrance Gate, a Relay Gate Controller
+    # whose Open relay is bound to the doorbell camera's driver 158, is its door by itself, opened with
+    # its own Open; an admin links the KNX relay 70 besides, and takes it away again.
+    if entrance["doors"] != [{"id": 76, "link": "automatic", "can_open": True}]:
+        fail(f"GET /v1/doorbells/68 should list the gate on its driver's relay: {entrance['doors']}")
+    linked = client.check("PUT", "/v1/doorbells/68/doors", 200, body={"door_ids": [70, 76]})
+    if [(door["id"], door["link"]) for door in linked["doors"]] != [(76, "automatic"), (70, "manual")]:
+        fail(f"PUT /v1/doorbells/68/doors should link the KNX relay once, the gate staying automatic: {linked['doors']}")
+    client.check("PUT", "/v1/doorbells/68/doors", 400, body={"door_ids": [20]})
+    client.check("PUT", "/v1/doorbells/68/doors", 400, body={"doors": [70]})
+    client.check("PUT", "/v1/doorbells/99/doors", 404, body={"door_ids": []})
+    client.check("POST", "/v1/relays/76/pulse", 202, body={"doorbell": 68})
+    if client.check("GET", "/v1/activity?kind=door", 200)["items"][0]["ids"].get("doorbell_id") != 68:
+        fail("an opening from the doorbell should say so in the history")
+    client.check("PUT", "/v1/doorbells/68/doors", 200, body={"door_ids": []})
     if bridge.camera_alert(157, "Animal") != 1:
         fail("an agreement camera's Alert should be watched by its name")
 
@@ -1105,7 +1132,7 @@ def main():
         players.terminate()
         fail(f"the fake Sonos players did not start: {started!r}")
     spec_json = ROOT / "dist" / "openapi.json"
-    bridge = dev_server.Bridge(lua, spec_json if spec_json.is_file() else None, int(started.split()[-1]), agreement=True, doors=True)
+    bridge = dev_server.Bridge(lua, spec_json if spec_json.is_file() else None, int(started.split()[-1]), agreement=True, doors=True, control4_sonos=True)
     server = dev_server.Server(("127.0.0.1", 0), dev_server.make_handler(bridge))
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

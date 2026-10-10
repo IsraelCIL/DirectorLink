@@ -372,6 +372,23 @@ export default {
     },
     notificationTitle: "Someone is at the door",
     notificationBody: "{name} rang.",
+    // A doorbell's doors and its own screen (1.11.0, ADR-078).
+    openDoor: "Open {name}",
+    screenTitle: "Doorbell",
+    screenLink: "Doorbell screen",
+    notFoundTitle: "Doorbell not found",
+    notFoundText: "It may have been removed from the Control4 project.",
+    links: {
+      title: "Doors and gates at this doorbell",
+      help: "When it rings, its screen and Home’s banner show Open for each, to whoever may open that door. A gate whose controller is on the doorbell’s own relay is here by itself.",
+      automatic: "On the doorbell’s relay",
+      manual: "Added here",
+      none: "No door or gate here yet.",
+      add: "Add a door or gate",
+      addButton: "Add",
+      remove: "Remove",
+      removeLabel: "Remove {name} from this doorbell",
+    },
   },
   // The alarm, read-only (ADR-038): for members and admins, once the installer turned it on.
   alarm: {
@@ -524,10 +541,10 @@ export default {
         coolWarmer: "cool setpoint {degrees} warmer",
         coolCooler: "cool setpoint {degrees} cooler",
       },
-      blinds: { open: "blinds open", close: "blinds closed", position: "blinds {percent}%", stop: "blinds stop" },
-      blind: { open: "open", close: "close", position: "{percent}%", stop: "stop" },
-      fans: { on: "fans on", off: "fans off" },
-      fan: { on: "on", off: "off" },
+      blinds: { open: "blinds open", close: "blinds closed", position: "blinds {percent}%", stop: "blinds stop", opener: "blinds {percent}% more open", closer: "blinds {percent}% more closed" },
+      blind: { open: "open", close: "close", position: "{percent}%", stop: "stop", opener: "{percent}% more open", closer: "{percent}% more closed" },
+      fans: { on: "fans on", off: "fans off", faster: { one: "fans a speed faster", other: "fans {count} speeds faster" }, slower: { one: "fans a speed slower", other: "fans {count} speeds slower" } },
+      fan: { on: "on", off: "off", faster: { one: "a speed faster", other: "{count} speeds faster" }, slower: { one: "a speed slower", other: "{count} speeds slower" } },
       music: { play: "play music", pause: "pause music", next: "next song", volume: "volume {percent}%", louder: "volume up {percent}", quieter: "volume down {percent}" },
       roomOff: "everything off",
       door: "open",
@@ -565,7 +582,9 @@ export default {
     },
     // Lights named for heating are left as they are unless named (1.10.0).
     heatersLeft: { one: "The heater “{names}” is left as it is.", other: "The heaters {names} are left as they are." },
-    // Two or three things said at once: the part that cannot be done, and nothing is.
+    // A room’s level goes to its dimmers only (1.10.3; said since 1.11.0).
+    switchesLeft: "Only dimmers get a percentage; switches stay as they are.",
+    // Two to five things said at once: the part that cannot be done, and nothing is.
     part: "In “{part}”: {text} Nothing was done.",
     problem: {
       viewOnly: "This device can’t control the home.",
@@ -596,6 +615,10 @@ export default {
       cannotDimRoom: "The lights in {room} only turn on and off.",
       noPosition: "{name} only opens and closes fully.",
       noPositionRoom: "The blinds in {room} only open and close fully.",
+      noBlindPosition: "{name} doesn’t say where it is. Say open, close or a percentage.",
+      noSpeeds: "{name} only turns on and off.",
+      noSpeedsRoom: "The fans in {room} only turn on and off.",
+      speedUnknown: "{name} doesn’t say which speed it runs at. Set its speed in its room.",
       noMode: "{name} has no {mode} mode.",
       noModes: "{name} has no mode to turn on.",
       alreadyOn: "{name} is already on.",
@@ -1302,6 +1325,8 @@ export default {
     scheduleFailedNamed: "{home} – the schedule for {name} had a problem at {time}. Open the app to see what happened.",
     other: "{home} – something needs your attention. Open the app to see what happened.",
     doorbell: "{name} rang at {time}.",
+    // A ring's button where the browser shows them (1.11.0): it opens the doorbell's screen.
+    openDoorAction: "Open {name}…",
     doorOpened: "{name} was opened by {who} at {time}.",
     doorOpenedScene: "{name} was opened by {who}, with the scene {scene}, at {time}.",
     doorOpenedControl4: "{name} was opened in Control4 at {time}.",
@@ -1336,6 +1361,16 @@ export default {
       object_removed: "Object removed",
       alarm_input: "Alarm input",
       pir: "Motion (PIR)",
+      // Sounds a camera hears (1.11.0, ADR-080): "Smoke alarm at Garden at 21:14."
+      smoke_alarm: "Smoke alarm",
+      co_alarm: "CO alarm",
+      siren: "Siren",
+      baby_crying: "Baby crying",
+      speech: "Someone talking",
+      barking: "Dog barking",
+      burglar_alarm: "Burglar alarm",
+      car_horn: "Car horn",
+      glass_break: "Glass breaking",
       other: "Alert",
     },
     settings: {
@@ -1347,7 +1382,7 @@ export default {
       help: "A notification on this device, also when the app is closed. What it says is sealed for this device: DirectorLink’s servers can’t read it.",
       helpAdmins: "A notification when the home has been offline for 10 minutes, or when a schedule had a problem. For admins; an alert never names a room, device or schedule.",
       kindsTitle: "What to alert about",
-      cameraHelp: "Off at first: cameras can be busy. What each camera alerts about is set in its driver in Control4 (on the Hikvision drivers, its Alert On); at most one a minute per camera.",
+      cameraHelp: "Off at first: cameras can be busy. What each camera alerts about is set in its driver in Control4 (on the Hikvision drivers, its Alert On); at most one a minute per camera, but a smoke or CO alarm comes even right after another alert.",
       kinds: {
         offline: "The home is offline for 10 minutes",
         device_requests: "A new device of mine asks to join",
@@ -1542,6 +1577,7 @@ export default {
     linkGone: "The scene was deleted",
     answered: "Answering the link “{label}”",
     answeredUnnamed: "Answering an ask-before-opening link",
+    fromDoorbell: "From the doorbell {name}",
   },
   palettes: {
     graphite: "Graphite",
@@ -1939,6 +1975,7 @@ export default {
       roomOrder: "Rooms in the home’s order",
       sonosRooms: "Sonos players with a room chosen",
       sceneLinks: "Scenes with a link for automations",
+      doorbellDoors: "Doors and gates added to doorbells",
       yoursAdded: "This device keeps its access (it was paired after the backup was made).",
       keysKept: "Keys: kept as they are now. Every device keeps the access it has now, and none of the backup’s keys comes back, so a device removed since stays out.",
       keysBack: "Keys that come back",
@@ -1999,6 +2036,7 @@ export default {
       roomNames: "room names",
       roomOrder: "the room order",
       sonosRoom: "the Sonos player “{name}”",
+      doorbellDoors: "the doors at the doorbell “{name}”",
       personRooms: "{name}’s rooms",
       hiddenRooms: "the rooms hidden from members",
     },

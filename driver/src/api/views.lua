@@ -1,6 +1,7 @@
 -- API representations. This is the only place internal registry records become public JSON,
 -- so Control4 specifics (proxy drivers, command names, variable IDs) stay out of the API.
 
+local Classifier = require("src.adapters.classifier")
 local Json = require("src.core.json")
 local RoomNames = require("src.core.room_names")
 local LastModes = require("src.core.last_modes")
@@ -113,7 +114,26 @@ function Views.partOf(registry, device)
     return shown(whole) and wholeId or nil
 end
 
-function Views.device(registry, device)
+-- Whether an unsupported device is part of Music (1.11.0, ADR-080): its protocol driver (or the
+-- device itself, a driver without proxies) is a Sonos driver (Classifier.isSonosDriver: Control4's
+-- sonos.c4z and the like) while DirectorLink plays Sonos itself (`sonosOn`: Composer's Sonos On).
+function Views.partOfMusic(device, sonosOn)
+    if sonosOn ~= true or type(device) ~= "table" or shown(device) then
+        return false
+    end
+    if Classifier.isSonosDriver(device.proxy and device.proxy.driver) then
+        return true
+    end
+    for _, protocol in ipairs(device.protocols or {}) do
+        if Classifier.isSonosDriver(protocol.driver) then
+            return true
+        end
+    end
+    return false
+end
+
+-- `sonosOn`: DirectorLink plays Sonos itself (part_of_music, 1.11.0).
+function Views.device(registry, device, sonosOn)
     local deviceType = Views.deviceType(device)
     local supported = shown(device)
     return {
@@ -124,6 +144,7 @@ function Views.device(registry, device)
         supported = supported,
         href = supported and (RESOURCE_PATH[deviceType] .. tostring(device.id)) or Json.null,
         part_of = Views.partOf(registry, device) or Json.null,
+        part_of_music = Views.partOfMusic(device, sonosOn),
     }
 end
 

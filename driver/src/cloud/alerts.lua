@@ -57,6 +57,12 @@ Alerts.FRIDGE_SECONDS = 300
 Alerts.CAMERA_PER_HOUR = 30
 Alerts.SCHEDULE_PER_HOUR = 3
 Alerts.PER_HOUR = 60
+-- A camera's alerts that cannot wait (1.11.0, ADR-080): a smoke or CO alarm the camera heard. Not
+-- held back by the camera's other alerts: one has a minute of its own per camera and label (at most
+-- one smoke alarm a camera in CAMERA_SECONDS), and URGENT_PER_HOUR an hour in the home of its own,
+-- apart from CAMERA_PER_HOUR (a busy camera's motion cannot use it up). PER_HOUR holds for them too.
+Alerts.URGENT = { smoke_alarm = true, co_alarm = true }
+Alerts.URGENT_PER_HOUR = 10
 -- A door or doorbell reporting an opening this soon after DirectorLink's own command to it was
 -- opened by that command (already in the history, with who did it). A Relay Door, Gate or Garage
 -- Door Controller with only its Opened Contact says Opened once the gate is fully open: for what the
@@ -94,6 +100,7 @@ local state = {
     hour = {},
     schedules = {},
     cameras = {},
+    urgent = {},
     -- The alert keys of lock keys: key id -> { lock, enc, mac }.
     sealing = {},
 }
@@ -637,26 +644,32 @@ end
 -- Hikvision drivers apply the camera's Alert On filter, the hub's switch and its snooze before:
 -- src/adapters/camera.lua): the keys that chose camera alerts and may see that camera's pictures,
 -- saying what it saw (`device.state.alert.what`: person, vehicle, line_crossing, ... or other), at
--- most once a camera in CAMERA_SECONDS and CAMERA_PER_HOUR an hour. Not brief: someone in the
--- garden at night is worth knowing later too.
+-- most once a camera in CAMERA_SECONDS and CAMERA_PER_HOUR an hour. A smoke or CO alarm (URGENT,
+-- 1.11.0, ADR-080) is counted apart: once a camera and label in CAMERA_SECONDS, whatever else that
+-- camera alerted about, and URGENT_PER_HOUR an hour. Not brief: someone in the garden at night is
+-- worth knowing later too.
 function Alerts.camera(device, now)
     now = now or Clock.now()
     if type(device) ~= "table" then
         return nil, "no camera"
     end
-    if tooSoon("camera:" .. tostring(device.id), Alerts.CAMERA_SECONDS, now) then
+    local alert = type(device.state) == "table" and device.state.alert or nil
+    local what = type(alert) == "table" and type(alert.what) == "string" and alert.what or "other"
+    local urgent = Alerts.URGENT[what] == true
+    local slot = "camera:" .. tostring(device.id) .. (urgent and (":" .. what) or "")
+    if tooSoon(slot, Alerts.CAMERA_SECONDS, now) then
         return sent("camera", nil, "too soon")
     end
-    state.cameras = lastHour(state.cameras, now)
-    if #state.cameras >= Alerts.CAMERA_PER_HOUR then
+    local hourly = urgent and "urgent" or "cameras"
+    state[hourly] = lastHour(state[hourly], now)
+    if #state[hourly] >= (urgent and Alerts.URGENT_PER_HOUR or Alerts.CAMERA_PER_HOUR) then
         return sent("camera", nil, "limit")
     end
     local detail = deviceDetail("camera", device)
-    local alert = type(device.state) == "table" and device.state.alert or nil
-    detail.what = type(alert) == "table" and type(alert.what) == "string" and alert.what or "other"
+    detail.what = what
     return sent("camera", send(detail, now, false, nil, nil, function(key)
         return Access.canSeePictures(key, device)
-    end, "cameras"))
+    end, hourly))
 end
 
 -- The history recorded a door or gate opened (`entry`, src/core/activity.lua: a pulse, a relay held

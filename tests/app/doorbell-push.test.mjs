@@ -31,6 +31,7 @@ Object.defineProperty(globalThis, "navigator", {
 });
 
 const { notifyRings, ringIsActive, trackRings } = await import("../../app/js/doorbells.js");
+const { state } = await import("../../app/js/state.js");
 
 const RING = "2026-10-03T05:00:00Z";
 
@@ -38,7 +39,9 @@ test("a ring is shown once, with its time, under the tag the controller's alert 
   await notifyRings([{ id: 93, name: "Front Gate", last_ring_at: RING }]);
   assert.equal(shown.length, 1);
   assert.equal(shown[0].options.tag, "doorbell-93");
-  assert.deepEqual(shown[0].options.data, { url: "/#/", ring: RING });
+  // Its tap opens the doorbell's screen (1.11.0, ADR-078).
+  assert.deepEqual(shown[0].options.data, { url: "/#/doorbell/93", ring: RING });
+  assert.equal(shown[0].options.actions, undefined, "no buttons where the browser shows none");
 
   // The same ring again (the alert came first and shows it): not shown twice.
   await notifyRings([{ id: 93, name: "Front Gate", last_ring_at: RING }]);
@@ -62,4 +65,29 @@ test("a last_ring_at that goes back is not a ring", () => {
   assert.equal(ringIsActive(restarted), false, "no banner");
   assert.deepEqual(trackRings([{ id: 94, name: "Entrance", last_ring_at: LATER }]), [], "back to the ring it knows: not a new one");
   assert.deepEqual(trackRings([{ id: 94, name: "Entrance", last_ring_at: "2026-10-03T05:20:00Z" }]).length, 1, "the next ring");
+});
+
+// 1.11.0 (ADR-078): where the browser shows a notification's buttons, the app's own ring notification
+// offers "Open <door>…" for each door at the doorbell this user may open, as the controller's alert
+// does (sw.js): it opens the doorbell's screen. None for a door this user may not open.
+test("where the browser shows buttons, a ring offers Open <door>… for the doors this user may open", async () => {
+  shown.length = 0;
+  globalThis.Notification = { permission: "granted", maxActions: 2 };
+  state.relays = [{ id: 76, name: "Entrance Gate" }, { id: 70, name: "Main Door" }];
+  const doorbell = {
+    id: 68,
+    name: "Entrance",
+    last_ring_at: "2026-10-03T06:00:00Z",
+    doors: [{ id: 76, link: "automatic", can_open: true }, { id: 70, link: "manual", can_open: false }, { id: 71, link: "manual", can_open: true }],
+  };
+  await notifyRings([doorbell]);
+  assert.deepEqual(shown[0].options.actions, [{ action: "door-76", title: "Open Entrance Gate…" }], "the gate; not the door this user may not open, nor one not listed here");
+  assert.equal(shown[0].options.data.url, "/#/doorbell/68");
+
+  // A member without doors: none.
+  state.access = { role: "member", doors: false };
+  await notifyRings([{ ...doorbell, last_ring_at: "2026-10-03T06:05:00Z" }]);
+  assert.equal(shown[1].options.actions, undefined);
+  state.access = null;
+  globalThis.Notification = { permission: "granted" };
 });

@@ -8,8 +8,13 @@
   "name": "directorlink-api",
   "main": "src/index.js",
   "compatibility_date": "2026-09-25",
+  // Workers Logs keeps DirectorLink's own lines (each event one JSON line, README.md) but not
+  // Cloudflare's invocation log for every request and WebSocket message, which was most of the
+  // log's lines and of its cost (1.11.0, ADR-081). Errors keep a line of their own (worker_error,
+  // socket_message_failed, alert_alarm_failed, …), and the dashboard's metrics still count them.
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": { "invocation_logs": false }
   },
   "durable_objects": {
     "bindings": [

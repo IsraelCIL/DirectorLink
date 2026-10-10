@@ -111,8 +111,9 @@ class FakeCacheStorage {
   }
 }
 
-// `notifications`: what getNotifications finds (the notifications the app shows).
-async function startWorker({ oldCaches = [], windows = [], opened = [], shown = [], notifications = [] } = {}) {
+// `notifications`: what getNotifications finds (the notifications the app shows). `maxActions`: the
+// buttons the browser shows on a notification (Android and desktop Chrome: 2; none on iPhone).
+async function startWorker({ oldCaches = [], windows = [], opened = [], shown = [], notifications = [], maxActions } = {}) {
   const listeners = {};
   const network = makeNetwork();
   const storage = new FakeCacheStorage();
@@ -126,6 +127,7 @@ async function startWorker({ oldCaches = [], windows = [], opened = [], shown = 
     },
     addEventListener: (type, listener) => (listeners[type] = listener),
     skipWaiting: async () => {},
+    Notification: maxActions === undefined ? undefined : { maxActions },
     clients: {
       claim: async () => {},
       matchAll: async () => windows,
@@ -171,10 +173,10 @@ async function startWorker({ oldCaches = [], windows = [], opened = [], shown = 
     await Promise.all(background);
     return response;
   };
-  const notificationClick = async (data) => {
+  const notificationClick = async (data, action = "") => {
     let pending;
     let closed = false;
-    listeners.notificationclick({ notification: { data, close: () => (closed = true) }, waitUntil: (promise) => (pending = promise) });
+    listeners.notificationclick({ action, notification: { data, close: () => (closed = true) }, waitUntil: (promise) => (pending = promise) });
     await pending;
     return closed;
   };
@@ -217,8 +219,8 @@ test("install saves every page under each path, without redirects", async () => 
 });
 
 test("activate removes caches from older versions", async () => {
-  const { storage } = await startWorker({ oldCaches: ["directorlink-shell-v24", "directorlink-shell-v32", "directorlink-shell-v45"] });
-  assert.deepEqual(await storage.keys(), ["directorlink-shell-v46"]);
+  const { storage } = await startWorker({ oldCaches: ["directorlink-shell-v24", "directorlink-shell-v32", "directorlink-shell-v46"] });
+  assert.deepEqual(await storage.keys(), ["directorlink-shell-v47"]);
 });
 
 test("online page loads come from the network and refresh the saved copy", async () => {
@@ -415,7 +417,7 @@ test("a sealed alert opens with this device's alert key and says what happened, 
   assert.equal(shown[0].options.renotify, true);
   assert.equal(shown[0].options.data.ring, "2026-10-03T05:00:00Z");
   await notificationClick(shown[0].options.data);
-  assert.deepEqual(opened, [`${ORIGIN}/#/`], "a ring opens Home, where its banner is");
+  assert.deepEqual(opened, [`${ORIGIN}/#/doorbell/93`], "a ring opens its doorbell's screen (1.11.0)");
 
   await push(sealedPush(door.sealed));
   assert.equal(shown[1].title, "DirectorLink");
@@ -561,6 +563,53 @@ test("a camera's alert says what it saw at which camera, in the app's words, and
   assert.equal(shown.at(-1).options.tag, "camera-66");
 });
 
+// The sounds a camera hears (1.11.0, ADR-080): said in the worker's own English when the app gave
+// no words, in the app's words otherwise; a smoke or CO alarm keeps a notification of its own, so
+// that the camera's next alert does not take its place.
+test("a camera's smoke alarm is said by name and keeps its own notification; other sounds by name too", async () => {
+  const shown = [];
+  const { storage, push } = await startWorker({ shown });
+  await keepAlertKey(storage);
+  const at = "2026-10-03T18:14:00Z";
+  const clock = sealedClock(at);
+  for (const [what, body, tag] of [
+    ["smoke_alarm", `Smoke alarm at Garden at ${clock}.`, "camera-65-smoke_alarm"],
+    ["co_alarm", `CO alarm at Garden at ${clock}.`, "camera-65-co_alarm"],
+    ["siren", `Siren at Garden at ${clock}.`, "camera-65"],
+    ["baby_crying", `Baby crying at Garden at ${clock}.`, "camera-65"],
+    ["speech", `Someone talking at Garden at ${clock}.`, "camera-65"],
+    ["barking", `Dog barking at Garden at ${clock}.`, "camera-65"],
+    ["burglar_alarm", `Burglar alarm at Garden at ${clock}.`, "camera-65"],
+    ["car_horn", `Car horn at Garden at ${clock}.`, "camera-65"],
+    ["glass_break", `Glass breaking at Garden at ${clock}.`, "camera-65"],
+    ["motion", `Motion at Garden at ${clock}.`, "camera-65"],
+  ]) {
+    await push(sealedPush(sealDetail({ v: 1, kind: "camera", at, id: 65, name: "Garden", room: "Living Room", room_id: 11, what })));
+    assert.equal(shown.at(-1).options.body, body, what);
+    assert.equal(shown.at(-1).options.tag, tag, what);
+    assert.equal(shown.at(-1).options.data.url, "/#/cameras/65", what);
+  }
+
+  // In every language, with the app's words.
+  for (const code of ["he", "es", "it"]) {
+    const { default: words } = await import(`../../app/i18n/${code}.js`);
+    await (await storage.open("directorlink-alerts")).put("/alert-texts.json", new Response(JSON.stringify({
+      lang: code,
+      dir: code === "he" ? "rtl" : "ltr",
+      camera_title: words.alerts.cameraTitle,
+      camera: words.alerts.camera,
+      camera_smoke_alarm: words.alerts.cameraSaw.smoke_alarm,
+      camera_other: words.alerts.cameraSaw.other,
+    })));
+    const name = code === "he" ? "גינה" : "Jardín";
+    await push(sealedPush(sealDetail({ v: 1, kind: "camera", at, id: 66, name, what: "smoke_alarm" })));
+    const time = sealedClock(at, code);
+    const expected = { he: `גלאי עשן ב-גינה ב-${time}.`, es: `Alarma de humo en Jardín a las ${time}.`, it: `Allarme fumo presso Jardín alle ${time}.` }[code];
+    assert.equal(shown.at(-1).options.body, expected, code);
+    assert.equal(shown.at(-1).options.tag, "camera-66-smoke_alarm", code);
+  }
+});
+
 test("a ring the app already shows, or shows on its banner now, is shown again quietly", async () => {
   const shown = [];
   const [ring] = VECTORS.details;
@@ -633,4 +682,91 @@ test("a push subscription the browser replaced or dropped is told to the open ap
   windows.length = 0;
   await subscriptionChange();
   assert.equal(messages.length, 1, "no window: the app does it at its next start");
+});
+
+// A doorbell's ring and its doors (1.11.0, ADR-078): its tap opens the doorbell's own screen, also when
+// the app was closed (opened there, and the tap kept a minute for an app that opens elsewhere or was
+// asleep, js/pwa.js); where the browser shows buttons, "Open <door>…" for each door at it this user may
+// open, as the app kept them for this home and key, opening the same screen, never the door.
+async function keepRingDoors(storage, value) {
+  await (await storage.open("directorlink-alerts")).put("/ring-doors.json", new Response(JSON.stringify(value)));
+}
+
+const ENTRANCE_RING = { v: 1, kind: "doorbell", at: "2026-10-10T08:00:00Z", id: 763, name: "DoorBird", room: "Entrance", room_id: 12 };
+const RING_DOORS = { home: VECTORS.home, key: VECTORS.key, doorbells: { 763: { camera: 763, doors: [{ id: 531, name: "שער כניסה" }, { id: 70, name: "Main Door" }, { id: 71, name: "Garden Gate" }] } } };
+
+test("a ring's tap opens its doorbell's screen, and is kept for the app it opens", async () => {
+  const shown = [];
+  const opened = [];
+  const windows = [];
+  const { storage, push, notificationClick } = await startWorker({ shown, opened, windows });
+  await keepAlertKey(storage);
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.equal(shown[0].options.data.url, "/#/doorbell/763");
+  assert.equal(shown[0].options.actions, undefined, "no buttons where the browser shows none (iPhone)");
+
+  const before = Date.now();
+  await notificationClick(shown[0].options.data);
+  assert.deepEqual(opened, [`${ORIGIN}/#/doorbell/763`], "the closed app opens on the doorbell's screen");
+  const kept = await (await (await storage.open("directorlink-alerts")).match("/notification-open.json")).json();
+  assert.equal(kept.url, `${ORIGIN}/#/doorbell/763`, "kept for an app that opens on its start page, or was asleep");
+  assert.ok(kept.at >= before && kept.at <= Date.now());
+
+  // The app is open: it is told, and brought to the front.
+  const messages = [];
+  windows.push({ url: `${ORIGIN}/#/settings`, focus: async () => {}, postMessage: (message) => messages.push({ ...message }) });
+  await notificationClick(shown[0].options.data);
+  assert.deepEqual(messages, [{ type: "directorlink-open", url: `${ORIGIN}/#/doorbell/763` }]);
+  assert.equal(opened.length, 1);
+
+  // A ring without its doorbell's id still opens Home.
+  await push(sealedPush(sealDetail({ ...ENTRANCE_RING, id: undefined })));
+  assert.equal(shown.at(-1).options.data.url, "/#/");
+});
+
+test("where the browser shows buttons, a ring offers Open <door>… for its doors, which opens the same screen", async () => {
+  const shown = [];
+  const opened = [];
+  const { storage, push, notificationClick } = await startWorker({ shown, opened, maxActions: 2 });
+  await keepAlertKey(storage);
+  // Without the doors the app keeps: no buttons.
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.equal(shown.at(-1).options.actions, undefined);
+
+  await keepRingDoors(storage, RING_DOORS);
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.deepEqual(
+    shown.at(-1).options.actions.map((action) => ({ ...action })),
+    [
+      { action: "door-531", title: "Open שער כניסה…" },
+      { action: "door-70", title: "Open Main Door…" },
+    ],
+    "two at most, in the doorbell's order"
+  );
+  // In the app's language.
+  await (await storage.open("directorlink-alerts")).put("/alert-texts.json", new Response(JSON.stringify({ lang: "he", dir: "rtl", doorbell_open_door: "פתיחת {name}…" })));
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.equal(shown.at(-1).options.actions[0].title, "פתיחת שער כניסה…");
+
+  // A button opens the doorbell's screen, as the tap does: it never opens the door itself.
+  await notificationClick(shown.at(-1).options.data, "door-531");
+  assert.deepEqual(opened, [`${ORIGIN}/#/doorbell/763`]);
+
+  // Another doorbell, another key's or another home's doors: no buttons.
+  await push(sealedPush(sealDetail({ ...ENTRANCE_RING, id: 93 })));
+  assert.equal(shown.at(-1).options.actions, undefined);
+  await keepRingDoors(storage, { ...RING_DOORS, key: "ffffffff" });
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.equal(shown.at(-1).options.actions, undefined);
+  await keepRingDoors(storage, { ...RING_DOORS, home: "f".repeat(32) });
+  await push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.equal(shown.at(-1).options.actions, undefined);
+
+  // One button where the browser shows one.
+  const one = [];
+  const worker = await startWorker({ shown: one, maxActions: 1 });
+  await keepAlertKey(worker.storage);
+  await keepRingDoors(worker.storage, RING_DOORS);
+  await worker.push(sealedPush(sealDetail(ENTRANCE_RING)));
+  assert.deepEqual(one[0].options.actions.map((action) => action.action), ["door-531"]);
 });

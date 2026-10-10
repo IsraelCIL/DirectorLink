@@ -2,6 +2,48 @@
 
 ## Current release
 
+`v1.11.0` — Smaller Worker logs (1110e), Control4's Sonos drivers (1110d), camera sounds by name (1110c), commands that do even more (1110b), open the gate from the ring (1110a). A Worker change (logs only); no D1 migration.
+
+## 1110e. Smaller Worker logs (1.11.0)
+
+1. After the Worker deploy, open the app away from home (or on the iPhone) and use it a minute. Workers Observability for `directorlink-api` shows no line per request or WebSocket message, and no `message_relayed` for quick taps.
+2. The rare lines still come: unplug the controller's network cable for a minute and plug it back in: `driver_disconnected`, then `driver_connected`. Signing in shows `signed_in`; a doorbell ring shows `notify_sent`.
+
+## 1110d. Control4's Sonos drivers (1.11.0)
+
+1. Owner's controller (no Control4 Sonos driver): every room shows the same "other devices" as on 1.10.3; in the console, `GET /v1/devices` shows `part_of_music: false` on every device.
+2. Dev server: `node tests/sonos/fake-sonos.mjs --port 8212`, then `python -u scripts/dev_server.py --sonos 8212 --control4-sonos`, serve app/ and pair. The Kitchen shows its Music card, and its other devices list Front Door but not Sonos Network or Kitchen Sonos; the Living Room lists Sonance Amp but not Living Room Sonos or Sonos Line In. Type `sonos off` and reload: they are listed again.
+
+## 1110c. Camera sounds by name (1.11.0)
+
+1. Owner's controller: a Hikvision alert (person, vehicle) arrives as before, at most one a camera a minute. Settings → Alerts shows the new line under the camera switch, in each language.
+2. With the next UniFi Protect driver (sounds as `Alert`): a camera hearing a smoke alarm right after a motion alert sends "Smoke alarm at <camera> at <time>" within seconds, as a separate notification; a dog barking within a minute of another alert from that camera is dropped.
+
+## 1110b. Commands that do even more (1.11.0)
+
+On the iPhone's Home Screen app:
+1. **Blinds a step.** *תפתחו קצת את התריס בסלון*: "סלון: פתיחת התריסים בעוד 20%", and the shade moves 20 points from where it was (its slider before and after). Then *תסגרו עוד קצת את התריס בסלון* and *תפתח את התריס בסלון ב-20% יותר*. *תעלו את התריס בסלון ב-20%* is not understood, as expected (to or by?).
+2. **Doors.** *תפתחו קצת את שער החניה*: "לא הבנתי", and the gate's button does not even show "tap again".
+3. **Levels.** *אורות בסלון לחצי*, then *תעמעמו את האור בסלון לרבע*: the dimmers go to 50% and 25%, the reply says only dimmers get a percentage, and the KNX switches, heaters and the door lock stay as they were. *תגבירו את האור בסלון ל-80%* sets 80%.
+4. **Warmer without the AC.** In a room with one AC that is on, *יותר חם בחדר שינה*: +1°. In a room with two thermostats, *יותר קר בסלון*: "איזה מהם?" with both. *יותר חם לי*, *נהיה קר בסלון*, *יותר קר פה*: nothing happens.
+5. **Five things.** *כבו את האור במטבח, תסגרו את התריס במטבח, תדליקו את האור בסלון, תכוונו את המזגן בסלון ל-23 ותפעילו לילה טוב*: five lines, each done. A sixth part: "עד 5 דברים בכל פעם, בבקשה." and nothing runs. A fifth part *…ותפתחו את שער החניה מחר*: "לא הבנתי", and nothing runs.
+6. **Fans** (dev server, or a home with fans): *תגבירו את המאוורר בסלון*: one speed up; *המאוורר לאט יותר*: one down; an off fan goes to its lowest speed on "faster".
+7. **Spanish and Italian:** *abre un poco la persiana del salón*, *más calor en el salón*; *alza un po' la tapparella del soggiorno*, *metti la luce del soggiorno a un quarto*.
+
+## 1110a. Open the gate from the ring (1.11.0)
+
+The owner's DoorBird (driver 761, doorbell camera 763) and gate (controller 530, button 531):
+1. After updating the driver and reloading the app, in the API console `GET /v1/doorbells/763` includes `doors: [{"id":531,"link":"automatic","can_open":true}]`. If `doors` is empty, the log line `door controller set up` for 531 says whether the bindings were read; add 531 by hand (step 6) meanwhile.
+2. Close the iPhone's Home Screen app. Ring the DoorBird and tap the alert: the app opens on the DoorBird's screen, the live picture loading at once, with a big "Open שער כניסה". Open, then "Tap again to open": "Sent", and the gate opens once.
+3. The same with the app in the background: the tap brings it to the front on the same screen.
+4. The same with the app open on Home: the ring banner shows "Open שער כניסה" under the picture, and the two taps open the gate.
+5. Settings → Controller → History: "Opened שער כניסה …", the iPhone, "From the doorbell <763's name>".
+6. On the doorbell's screen, as admin: "Doors and gates at this doorbell" lists שער כניסה as on the doorbell's relay, without Remove. Add a KNX door: its Open appears; remove it: it goes. Backup's restore preview counts "Doors and gates added to doorbells".
+7. An Android member's phone with doors and the gate's room: the ring notification shows "Open שער כניסה…", which opens the screen, not the gate; Open there works. Without doors or the gate's room: the picture and no Open ("Opening the gate needs door access.").
+8. Door Control Disabled in Composer: no Open buttons, and the screen says Door Control is off. Set it back to Enabled.
+
+## Previous release
+
 `v1.10.3` — A member's requests (1103b), a room's level goes to dimmers only (1103a). No Worker change; no D1 migration.
 
 ## 1103b. A member's requests (1.10.3)
@@ -68,7 +110,7 @@
 1. Deploy the Worker, then update DirectorLink in Composer. Remote Status reads *Connected since …*. In Workers Observability the home's `driver_hello` has `interval_s: 5`.
 2. **A blink on purpose.** Away from home (the phone on mobile data), open a room through the account, with a light someone at home can see. On the router, reconnect the internet connection (for PPPoE: Disconnect, then Connect; the home gets a new public address, which ends the controller's open connection as a route change does; not a router reboot), with the router's status page open. Tap the light once **just as the router shows the internet connected again** (or in the last 2–3 s before it, if you know how long a reconnect takes): the relay still sends into the old connection, which is dead, and a request goes again only if the driver is back within 10 s of the tap (it finds the cut at its next ping, within 5 s, and is back about 1–2 s later). Within about 10 s of the tap the light changes, once, and the app shows it done, not "home offline". A tap earlier in a longer outage is not this case and may say the home is offline, as before 1.10.0.
    - The driver's relay log (`GET /v1/logs?category=relay`): `relay connection closed` (`connection lost`, `heard_s` about the outage's length, `retry_s` 1), then `connected to the relay` with `attempts: 1`; and `a request the relay sent again` with `outcome` `new` (the tap never reached the controller before the cut) or `answered again` (it had, and its answer was lost).
-   - Workers Observability: `request_resent` for the home with `count: 1`, then `message_relayed` for the tap.
+   - Workers Observability: `request_resent` for the home with `count: 1`, then (up to 1.10.3) `message_relayed` for the tap; from 1.11.0 a quick tap leaves no line (ADR-081).
    - If the relay log says `no answer` instead, the internet was away longer than the driver's silence rule (about 15 s): the driver dropped the connection itself, and the tap may say the home is offline, as before. Try again with a quicker reconnect.
 3. **A door opens once.** Repeat 2 with a gate's Open (its second tap while the internet reconnects): it opens once, and History has one opening.
 4. **Turn off all AC** (the case that was lost): repeat 2 with Home's Turn off all for the ACs. Every AC goes off, once, and the result names them.

@@ -38,7 +38,8 @@ export const ALERT_LABEL = "DirectorLink alert v1";
 // What the controller alerts about, in the order Settings lists them; offline is the servers' own.
 export const ALERT_KINDS = ["doorbell", "camera", "door_opened", "fridge_door", "schedule_failed"];
 // What a camera alert can say it saw (the labels of DirectorLink's camera agreement, ADR-065, and
-// the DirectorLink · Hikvision Camera driver's detections, ADR-056); anything else is "other".
+// the DirectorLink · Hikvision Camera driver's detections, ADR-056; since 1.11.0 the sounds a camera
+// hears, ADR-080); anything else is "other".
 export const CAMERA_DETECTIONS = [
   "person",
   "vehicle",
@@ -57,6 +58,15 @@ export const CAMERA_DETECTIONS = [
   "object_removed",
   "alarm_input",
   "pir",
+  "smoke_alarm",
+  "co_alarm",
+  "siren",
+  "baby_crying",
+  "speech",
+  "barking",
+  "burglar_alarm",
+  "car_horn",
+  "glass_break",
   "other",
 ];
 const TIMEOUT_MS = 10000;
@@ -80,6 +90,13 @@ function remembered() {
   } catch {
     return null;
   }
+}
+
+// The home and key id this browser gets alerts for (sealed to that key), or null while alerts are off
+// here: what the ring's doors kept for the service worker are about (js/doorbell-doors.js, 1.11.0).
+export function alertsHome() {
+  const saved = remembered();
+  return saved && /^[0-9a-f]{8}$/.test(saved.keyId || "") ? { home: saved.home, keyId: saved.keyId } : null;
 }
 
 function remember(value) {
@@ -186,6 +203,8 @@ export function alertTexts() {
     other: t("alerts.other", { home }),
     doorbell_title: t("doorbells.notificationTitle"),
     doorbell: t("alerts.doorbell"),
+    // A ring's button where the browser shows them (1.11.0, ADR-078): it opens the doorbell's screen.
+    doorbell_open_door: t("alerts.openDoorAction"),
     door_opened: t("alerts.doorOpened"),
     door_opened_scene: t("alerts.doorOpenedScene"),
     door_opened_control4: t("alerts.doorOpenedControl4"),

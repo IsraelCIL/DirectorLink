@@ -875,6 +875,42 @@ function Mock.withRelayControllers(project, list)
     return project
 end
 
+-- A gate at a doorbell camera of the camera agreement (1.11.0, ADR-078), as on the owner's
+-- controller (the Relay Gate Controller 530, its button 531, whose Open/Toggle relay is bound to the
+-- DirectorLink · DoorBird driver 761's relay connection "Relay 1"; 761's camera 763 is a doorbell):
+-- by default 76 "Entrance Gate" (Kitchen; driver 166, gate_relay_control.c4z, one relay, no contact)
+-- on the driver 158 of 68 "Entrance" (Mock.withAgreementCameras). `gate`: as an item of
+-- Mock.withRelayControllers' list.
+function Mock.withDoorbellGate(project, gate)
+    return Mock.withRelayControllers(project, {
+        gate or { id = 76, controller = 166, name = "Entrance Gate", room = 10, kind = "gate", state = "Unknown", bindings = { [1] = 158 } },
+    })
+end
+
+-- Control4's own Sonos drivers (1.11.0, ADR-080), as Snap One names them ("Works With Sonos
+-- Certified"): the household (sonosNetwork.c4z, an AV switch, 84 "Sonos Network" in the Kitchen),
+-- a player each (sonos.c4z, a media service: 85 "Kitchen Sonos", and 86 "Living Room Sonos" on a
+-- copy in another case), a Sonos driver that is its own device (87 "Sonos Line In",
+-- sonosGlobalLineIn.c4z), and Sonance's amplifier (88 "Sonance Amp"), which is not Sonos.
+function Mock.withControl4Sonos(project)
+    local function driver(protocol, file, room, roomName, proxy, name, proxyFile)
+        project.devices[protocol] = {
+            deviceName = "Sonos (Works With Sonos Certified)", driverFileName = file, roomId = room, roomName = roomName,
+            proxies = { [proxy] = { deviceName = name, driverFileName = proxyFile } },
+        }
+        project.devices[proxy] = {
+            deviceName = name, driverFileName = proxyFile, roomId = room, roomName = roomName,
+            protocol = { [protocol] = { deviceName = "Sonos (Works With Sonos Certified)", driverFileName = file } },
+        }
+    end
+    driver(180, "sonosNetwork.c4z", 10, "Kitchen", 84, "Sonos Network", "avswitch.c4i")
+    driver(181, "sonos.c4z", 10, "Kitchen", 85, "Kitchen Sonos", "media_service.c4i")
+    driver(182, "SONOS (1).c4z", 11, "Living Room", 86, "Living Room Sonos", "media_service.c4i")
+    project.devices[87] = { deviceName = "Sonos Line In", driverFileName = "sonosGlobalLineIn.c4z", roomId = 11, roomName = "Living Room" }
+    project.devices[88] = { deviceName = "Sonance Amp", driverFileName = "sonance_dsp2_750.c4z", roomId = 11, roomName = "Living Room" }
+    return project
+end
+
 -- A door controller's state changes as its driver does it: STATE, then the event of that state
 -- (Opened 1, Closed 2, Partial 3, Unknown 4). Returns how many registrations heard the event.
 Mock.CONTROLLER_EVENTS = { Opened = 1, Closed = 2, Partial = 3, Unknown = 4 }

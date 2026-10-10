@@ -30,6 +30,7 @@ local JewishCalendar = require("src.core.jewish_calendar")
 local Relay = require("src.cloud.relay")
 local SonosRooms = require("src.sonos.rooms")
 local SceneLinks = require("src.core.scene_links")
+local DoorbellDoors = require("src.core.doorbell_doors")
 
 local Backup = {}
 
@@ -67,6 +68,9 @@ local SECTIONS = {
     -- People's roles and permissions, the owner and the rooms hidden from members
     -- (src/auth/people.lua), from 1.8.0 (ADR-054).
     people = { version = People.STORE_VERSION, object = "people", optional = true },
+    -- The doors and gates an admin linked to a doorbell (src/core/doorbell_doors.lua), from 1.11.0
+    -- (ADR-078).
+    doorbell_doors = { version = DoorbellDoors.STORE_VERSION, object = "links", optional = true },
 }
 
 -- Scene step types and favorites ("kind:id") name the kinds of the project's devices so.
@@ -216,6 +220,17 @@ local function eachReference(sections, visit)
             visit("room", tonumber(id))
         end
     end
+    local links = sections.doorbell_doors and sections.doorbell_doors.links
+    for doorbellId, doors in pairs(isObject(links) and links or {}) do
+        if tonumber(doorbellId) then
+            visit("doorbell", tonumber(doorbellId))
+        end
+        for _, id in ipairs(items(doors)) do
+            if tonumber(id) then
+                visit("relay", tonumber(id))
+            end
+        end
+    end
 end
 
 -- The names of the rooms and devices the sections name, as the project has them now: what a
@@ -283,6 +298,7 @@ function Backup.export(registry)
         sonos_rooms = SonosRooms.backup(),
         scene_links = SceneLinks.backup(),
         people = People.backup(),
+        doorbell_doors = DoorbellDoors.backup(),
     }
     return {
         format = Backup.FORMAT,
@@ -903,6 +919,38 @@ local function matchSonosRooms(m, rooms)
     return result, count
 end
 
+-- The doors linked to doorbells (1.11.0, ADR-078) matched to the project as doors are (DOOR_KINDS):
+-- each doorbell and each door only with the same id and the same name, never another device, which
+-- would show a gate at the wrong doorbell; what matches nothing is left out (listed). Returns the
+-- section and how many doors stay linked.
+local function matchDoorbellDoors(m, links)
+    local doorbells = {}
+    for doorbellId in pairs(links) do
+        doorbells[#doorbells + 1] = doorbellId
+    end
+    table.sort(doorbells)
+    local result, count = {}, 0
+    for _, doorbellId in ipairs(doorbells) do
+        local doorbellName = infoName(m.devices[tostring(doorbellId)])
+        local where = { section = "doorbell_doors", name = doorbellName }
+        local newId = resolve(m, "doorbell", doorbellId, where)
+        local doors = {}
+        for _, doorId in ipairs(links[doorbellId]) do
+            -- Each door is looked at, so that one that matches nothing is listed even when its
+            -- doorbell is gone too.
+            local newDoor = resolve(m, "relay", doorId, where)
+            if newId and newDoor then
+                doors[#doors + 1] = newDoor
+            end
+        end
+        if #doors > 0 then
+            result[tostring(newId)] = doors
+            count = count + #doors
+        end
+    end
+    return { version = DoorbellDoors.STORE_VERSION, links = result }, count
+end
+
 local function matchRoomOrder(m, order)
     local result, seen = Json.array(), {}
     for _, id in ipairs(order) do
@@ -1204,6 +1252,8 @@ local READ_AT_START = {
     { name = "people", complete = People.complete },
     -- Always written: from a backup without them, the links here that still apply.
     { name = "scene_links", complete = SceneLinks.complete },
+    -- Only written when the backup has them (1.11.0, ADR-078).
+    { name = "doorbell_doors", complete = DoorbellDoors.complete, optional = true },
 }
 
 -- Checks `document` against this controller and works out everything a restore writes, without
@@ -1333,6 +1383,11 @@ function Backup.plan(document, context)
     end
 
     local people, peopleCount = matchPeople(m, keyInfo.action == "restore", sections.people, matchedProfiles, sceneIds)
+    -- A backup made before 1.11.0 has no doors linked to doorbells: the links made here stay.
+    local doorbellDoors, doorbellDoorsCount = nil, nil
+    if sections.doorbell_doors ~= nil then
+        doorbellDoors, doorbellDoorsCount = matchDoorbellDoors(m, DoorbellDoors.read(sections.doorbell_doors))
+    end
 
     local composer = Json.array()
     local stored = isObject(document.composer) and document.composer or {}
@@ -1368,6 +1423,7 @@ function Backup.plan(document, context)
             sonos_rooms = nullable(sonosCount),
             scene_links = #links,
             people = peopleCount,
+            doorbell_doors = nullable(doorbellDoorsCount),
         },
         left_out = counts,
         keys = keyInfo,
@@ -1404,6 +1460,7 @@ function Backup.plan(document, context)
             sonos_rooms = sonosRooms and { version = 1, rooms = sonosRooms } or nil,
             scene_links = { version = SceneLinks.STORE_VERSION, links = links },
             people = people,
+            doorbell_doors = doorbellDoors,
         },
     }
 end
@@ -1438,6 +1495,8 @@ local PARTS = {
     { name = "scene_links", take = SceneLinks.backup, write = SceneLinks.restore },
     -- Always written (1.8.0, ADR-054): from a backup without them, the people here that still apply.
     { name = "people", take = People.backup, write = People.restore },
+    -- Only when the backup has them (1.11.0, ADR-078).
+    { name = "doorbell_doors", take = DoorbellDoors.backup, write = DoorbellDoors.restore, optional = true },
 }
 
 local function write(part, data, now)

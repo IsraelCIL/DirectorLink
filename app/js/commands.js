@@ -4,22 +4,24 @@
 // (state.js): their rooms, the devices they control, the scenes they may run, their Sonos rooms, and
 // the doors and gates in their rooms (to open only with door access). Every action is the same call
 // a tap makes (controls.js, music.js, scenes.js, turn-off.js), so the controller decides as for any
-// tap; doors and gates, Turn off all and scenes that open doors keep their second tap. Two or three
+// tap; doors and gates, Turn off all and scenes that open doors keep their second tap. Up to five
 // things said at once are each shown, then done (each second tap still its own); a change by a step
-// ("brighter", "warmer", "louder") is worked out here from where each device is. Lights named for
-// heating are left as they are unless named (heaters.js), and it says so. The words never leave this
-// device. views/command.js shows the field and what this module says.
+// ("brighter", "warmer", "louder", 1.11.0: "open the blinds a bit", "faster") is worked out here from
+// where each device is. Lights named for heating are left as they are unless named (heaters.js),
+// and it says so, as it says that a room's level leaves its switches as they are. The words never
+// leave this device. views/command.js shows the field and what this module says.
 
 import { parseCommand } from "./command-parser.js";
 import { announce } from "./dom.js";
-import { allOff, setBlind, setFan, setLight, setStage, setThermostat, stopBlind } from "./controls.js";
+import { allOff, blindMove, setBlind, setFan, setLight, setStage, setThermostat, stopBlind } from "./controls.js";
 import { currentLanguage, formatTemperature, t } from "./i18n.js";
 import { isHeater } from "./heaters.js";
 import { climateIsOn, fanIsOn, lastMode, lightIsOn, modeLabel, roomById, roomGroup, roomName } from "./model.js";
 import { findMusic, musicAvailable, musicCommand, musicKey, musicRooms, setMusicLevels } from "./music.js";
+import { fanSpeeds } from "./fans.js";
 import { findScene, isolate, runScene, sceneOpensDoors } from "./scenes.js";
 import { activeSetpoint, isDual, setpointGap, withSetpoint } from "./setpoints.js";
-import { canSetPosition } from "./shades.js";
+import { canSetPosition, shadeView } from "./shades.js";
 import { can, deviceKey, findDevice, notify, state, ui } from "./state.js";
 import { defaultRange, isSensor, roundIn, scaleOf } from "./temperature.js";
 import { heaterNames, keptHeaters, offTargets, turnOffNow } from "./turn-off.js";
@@ -31,9 +33,9 @@ const CONFIRM_MS = 10000;
 
 // What the command area shows: null, or { stage, said, note, text, options, question, action,
 // stamp }. stage: running · done · partial · error · ask · confirm (Turn off all) · door · scene (one
-// that opens doors) · problem · unknown · message (from the microphone) · several (two or three
+// that opens doors) · problem · unknown · message (from the microphone) · several (two to five
 // things: `parts`, each { said, note, action, stage, text } with one of the first eight stages, or
-// cancelled). `note`: the heaters left as they are.
+// cancelled). `note`: the heaters left as they are, and a room's switches a level left (1.11.0).
 let current = null;
 let stamps = 0;
 
@@ -110,7 +112,8 @@ export function commandCatalog() {
       max: thermostat.target_temperature_max,
     }));
     add("blind", state.blinds, (blind) => ({ position: canSetPosition(blind) }));
-    add("fan", state.fans, (fan) => ({ on: Boolean(fan.on) }));
+    // A fan's own speeds (1.11.0): none, it only turns on and off.
+    add("fan", state.fans, (fan) => ({ on: Boolean(fan.on), speeds: fanSpeeds(fan) }));
     // A Sonos room is in the room it is shown in.
     if (musicAvailable()) add("music", musicRooms(), (item) => ({ room: item.room_id ?? null }));
   }
@@ -175,11 +178,16 @@ function doing(action) {
   if (action.type === "blinds") {
     const key = named ? "blind" : "blinds";
     if (change.stop) return t(`command.do.${key}.stop`);
+    if (Number.isFinite(change.positionBy)) return t(`command.do.${key}.${change.positionBy > 0 ? "opener" : "closer"}`, { percent: Math.abs(change.positionBy) });
     if (change.position === 100) return t(`command.do.${key}.open`);
     if (change.position === 0) return t(`command.do.${key}.close`);
     return t(`command.do.${key}.position`, { percent: change.position });
   }
-  if (action.type === "fans") return t(`command.do.${named ? "fan" : "fans"}.${change.on ? "on" : "off"}`);
+  if (action.type === "fans") {
+    const key = named ? "fan" : "fans";
+    if (Number.isFinite(change.speedBy)) return t(`command.do.${key}.${change.speedBy > 0 ? "faster" : "slower"}`, { count: Math.abs(change.speedBy) });
+    return t(`command.do.${key}.${change.on ? "on" : "off"}`);
+  }
   if (action.type === "music") {
     if (Number.isFinite(change.volume)) return t("command.do.music.volume", { percent: change.volume });
     if (Number.isFinite(change.volumeBy)) return t(`command.do.music.${change.volumeBy > 0 ? "louder" : "quieter"}`, { percent: Math.abs(change.volumeBy) });
@@ -249,6 +257,8 @@ function problemText(result) {
       return named ? t("command.problem.cannotDim", { name: isolate(named) }) : t("command.problem.cannotDimRoom", { room: isolate(room) });
     case "noPosition":
       return named ? t("command.problem.noPosition", { name: isolate(named) }) : t("command.problem.noPositionRoom", { room: isolate(room) });
+    case "noSpeeds":
+      return named ? t("command.problem.noSpeeds", { name: isolate(named) }) : t("command.problem.noSpeedsRoom", { room: isolate(room) });
     case "noMode":
       return result.mode ? t("command.problem.noMode", { name: isolate(named || room), mode: modeLabel(result.mode) }) : t("command.problem.noModes", { name: isolate(named || room) });
     case "alreadyOn":
@@ -297,6 +307,14 @@ function heaterNote(action, named = new Set()) {
   }
   heaters = heaters.filter((light) => !named.has(light.id));
   return heaters.length ? t("command.heatersLeft", { count: heaters.length, names: heaterNames(heaters) }) : "";
+}
+
+// What a command says under what it understood: the heaters it leaves as they are, and that a
+// room's level or step goes to its dimmers only, its switches left as they are (1.10.3's rule, said
+// since 1.11.0), unless another part of the sentence switches them.
+function noteOf(action, named = new Set()) {
+  const switches = action.type === "lights" ? (action.onOff || []).filter((id) => !named.has(id)) : [];
+  return [heaterNote(action, named), switches.length ? t("command.switchesLeft") : ""].filter(Boolean).join(" ");
 }
 
 // ---- running ---------------------------------------------------------------------------------
@@ -399,6 +417,36 @@ export function steppedVolume(item, by) {
   return volume === item.volume ? null : volume;
 }
 
+// A blind's position a step from where it is (1.11.0, ADR-079), from 0 (closed) to 100 (open):
+// from where it is going while it moves, else from where it reports it is. null: nothing changes;
+// { refused } when where it is isn't known (never a guess).
+export function steppedPosition(blind, by) {
+  const name = isolate(blind.name || "");
+  if (!canSetPosition(blind)) return { refused: t("command.problem.noPosition", { name }) };
+  const view = shadeView(blind, blindMove(blind.id));
+  const reported = blind.position_reported !== false && Number.isFinite(blind.position) ? blind.position : null;
+  // Moving to where it isn't said: not known either.
+  const from = view.moving ? (Number.isFinite(view.target) ? view.target : null) : reported;
+  if (from === null) return { refused: t("command.problem.noBlindPosition", { name }) };
+  const position = Math.min(100, Math.max(0, Math.round(from + by)));
+  return position === Math.round(from) ? null : { position };
+}
+
+// A fan's speed a step from where it is, along its own speeds (1.11.0, ADR-079): one that is off
+// goes to its lowest speed (or as many up as said) when faster and stays off when slower (slower
+// never turns one off). null: nothing changes; { refused } when it lists no speeds or doesn't say
+// which one it runs at.
+export function steppedSpeed(fan, by) {
+  const speeds = fanSpeeds(fan);
+  const name = isolate(fan.name || "");
+  if (!speeds.length) return { refused: t("command.problem.noSpeeds", { name }) };
+  if (!fan.on) return by > 0 ? { speed: speeds[Math.min(by, speeds.length) - 1] } : null;
+  if (!Number.isInteger(fan.speed)) return { refused: t("command.problem.speedUnknown", { name }) };
+  // The speeds above it when faster, below it when slower (its own, even one it doesn't list).
+  const way = by > 0 ? speeds.filter((speed) => speed > fan.speed) : speeds.filter((speed) => speed < fan.speed).reverse();
+  return way.length ? { speed: way[Math.min(Math.abs(by), way.length) - 1] } : null;
+}
+
 // Each device's request (`plan` gives a function that sends it, null for nothing to change, or
 // { refused } with why it cannot be done), then what they did.
 async function changeEach(kind, ids, plan) {
@@ -484,9 +532,21 @@ async function perform(action) {
         return plan?.patch ? () => setThermostat(thermostat, plan.patch) : plan;
       });
     case "blinds":
-      return changeEach("blind", action.ids, (blind) => (action.change.stop ? () => stopBlind(blind) : () => setBlind(blind, action.change.position)));
+      return changeEach("blind", action.ids, (blind) => {
+        if (Number.isFinite(action.change.positionBy)) {
+          const step = steppedPosition(blind, action.change.positionBy);
+          return !step || step.refused ? step : () => setBlind(blind, step.position);
+        }
+        return action.change.stop ? () => stopBlind(blind) : () => setBlind(blind, action.change.position);
+      });
     case "fans":
-      return changeEach("fan", action.ids, (fan) => (Boolean(fan.on) === action.change.on ? null : () => setFan(fan, action.change)));
+      return changeEach("fan", action.ids, (fan) => {
+        if (Number.isFinite(action.change.speedBy)) {
+          const step = steppedSpeed(fan, action.change.speedBy);
+          return !step || step.refused ? step : () => setFan(fan, { speed: step.speed });
+        }
+        return Boolean(fan.on) === action.change.on ? null : () => setFan(fan, action.change);
+      });
     case "music":
       return runMusic(action);
     case "roomOff":
@@ -529,7 +589,7 @@ function firstTap(device) {
 // Shows what it understood, then does it (or asks for the second tap), then shows the result.
 export function act(action) {
   const said = describe(action);
-  const note = heaterNote(action);
+  const note = noteOf(action);
   if (action.type === "door") {
     // The command is the first tap: the door's own button asks for the second, as everywhere.
     firstTap(action.device);
@@ -574,7 +634,7 @@ export function act(action) {
   return shown;
 }
 
-// ---- two or three things at once (1.10.0, ADR-066) -----------------------------------------------
+// ---- two to five things at once (1.10.0, ADR-066; five since 1.11.0, ADR-079) ---------------------
 
 // A part's stage when it is over: then, all of them over, the whole goes after a while.
 const OVER = new Set(["done", "cancelled"]);
@@ -604,7 +664,7 @@ export function actAll(actions) {
   // The lights each part changes, so that another part's note never says one is left as it is.
   const others = (index) => new Set(actions.flatMap((other, at) => (at !== index && other.type === "lights" ? other.ids : [])));
   const parts = actions.map((action, index) => {
-    const part = { said: describe(action), note: heaterNote(action, others(index)), action, stage: "running", text: "" };
+    const part = { said: describe(action), note: noteOf(action, others(index)), action, stage: "running", text: "" };
     if (action.type === "door") {
       firstTap(action.device);
       return { ...part, stage: "door" };

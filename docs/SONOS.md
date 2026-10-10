@@ -38,6 +38,13 @@ order work as for other devices.
 A Sonos room is a room as the Sonos app shows it: a stereo pair, or a home theater with its
 surrounds and sub, is one room. A Boost or a Bridge is no room.
 
+**Control4's own Sonos drivers too.** A project may also have Control4's Sonos drivers ("Works With
+Sonos Certified": `sonos.c4z` for each player, `sonosNetwork.c4z`, `sonosGlobalLineIn.c4z`, or any
+other driver with Sonos in its file name). DirectorLink does not control their devices; while Sonos
+is On they are the same players as its Music cards, so the app leaves them out of their room's
+"other devices" (1.11.0, ADR-080: `part_of_music` in `/v1/devices`, which still lists them). With
+Sonos Off they are listed there as before.
+
 ## In the app
 
 - **On a room's screen**, a Music card for each Sonos room there: the album art, what plays (title,

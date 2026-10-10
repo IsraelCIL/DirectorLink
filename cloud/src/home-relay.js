@@ -86,6 +86,9 @@ const RESEND_TIMEOUT_MS = 8000;
 // the relay's own 504 HOME_TIMEOUT reaches the app first, with time to spare for the Worker's own
 // work and the way back.
 const REQUEST_BUDGET_MS = 18000;
+// A relayed message is logged only when it was refused or took this long (1.11.0, ADR-081): one
+// line per message was most of the Worker's log, and logs are billed by the line.
+const SLOW_MESSAGE_MS = 3000;
 // A driver whose hello lists this keeps the alerts it sends (`notify`) until the relay answers
 // `notify_result`, and sends them again after a lost connection (1.10.1, ADR-073); the relay says
 // it does, right after that hello (`relay_features`). Alerts.js pushes each id once.
@@ -238,7 +241,18 @@ export class HomeRelay extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // Without Cloudflare's invocation logs (ADR-081) an error thrown here would leave no line: it is
+  // logged, then thrown as before.
   async webSocketMessage(ws, message) {
+    try {
+      await this.socketMessage(ws, message);
+    } catch (error) {
+      log("socket_message_failed", { error: String(error?.stack ?? error) });
+      throw error;
+    }
+  }
+
+  async socketMessage(ws, message) {
     const attachment = ws.deserializeAttachment() ?? {};
     attachment.lastSeen = Date.now();
     let data = null;
@@ -837,7 +851,10 @@ export class HomeRelay extends DurableObject {
       return problem(502, "HOME_DISCONNECTED", outcome.failed);
     }
     const { id: _id, ...reply } = outcome.message;
-    log("message_relayed", { home: homeId, type: message.type, ok: reply.ok ?? Boolean(reply.envelope), code: reply.code ?? null, ms });
+    const ok = reply.ok ?? Boolean(reply.envelope);
+    if (!ok || ms >= SLOW_MESSAGE_MS) {
+      log("message_relayed", { home: homeId, type: message.type, ok, code: reply.code ?? null, ms });
+    }
     return json(reply);
   }
 

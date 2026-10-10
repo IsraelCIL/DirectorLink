@@ -1,10 +1,10 @@
-// Say or type a command (1.9.0, ADR-063; 1.10.0, ADR-066, ADR-068): a sentence in English, Hebrew,
-// Spanish or Italian, by this user's own names of rooms, devices, scenes and Sonos rooms, becomes
-// one action of the app (or two or three: "kitchen lights off and close the blinds"), a question
-// (which one, which mode), a problem to say, or "I didn't understand". No AI and nothing sent
-// anywhere: words, numbers and the names the app already has for this user (js/commands.js builds
-// the catalog from what the controller lists for them). Its only import is heaters.js (the one rule
-// for lights named for heating), so the rules can be tested under Node
+// Say or type a command (1.9.0, ADR-063; 1.10.0, ADR-066, ADR-068; 1.11.0, ADR-079): a sentence in
+// English, Hebrew, Spanish or Italian, by this user's own names of rooms, devices, scenes and Sonos
+// rooms, becomes one action of the app (or up to five: "kitchen lights off and close the blinds"),
+// a question (which one, which mode), a problem to say, or "I didn't understand". No AI and nothing
+// sent anywhere: words, numbers and the names the app already has for this user (js/commands.js
+// builds the catalog from what the controller lists for them). Its only import is heaters.js (the
+// one rule for lights named for heating), so the rules can be tested under Node
 // (tests/app/command-parser.test.mjs).
 //
 // The languages (ADR-068): English and Hebrew are read together, as in 1.9.0 (their letters never
@@ -16,7 +16,7 @@
 // parseCommand(text, catalog, { language }) answers one of:
 //   { status: "ok", action }                     do it (doors, Turn off all and scenes that open
 //                                                doors still get their second tap: commands.js)
-//   { status: "ok", actions }                    two or three things, each understood; all of them
+//   { status: "ok", actions }                    two to five things, each understood; all of them
 //                                                are done (each second tap still its own)
 //   { status: "ask", options: [action], partial } which one; nothing is done until one is chosen.
 //                                                `partial`: only part of a name was said ("Did you
@@ -33,15 +33,16 @@
 //
 // The catalog: { rooms: [{ id, names }], scenes: [{ id, name }], devices: [{ kind, id, name, room,
 // ... }] }, the kinds: light (dimmable, on), thermostat (modes, mode, dual, min, max), blind
-// (position: it can stop between open and closed), fan (on), music (a Sonos room, its id a string),
-// relay and doorbell (doors and gates; canOpen).
+// (position: it can stop between open and closed), fan (on, speeds: its own, 1.11.0), music (a
+// Sonos room, its id a string), relay and doorbell (doors and gates; canOpen).
 //
 // An action: { type, ids, change, room, device, kept }. type: lights | climate | blinds | fans |
 // music (`ids` of that kind's devices, `change` what they get: also a step from where each one is,
-// brightnessBy, temperatureBy, volumeBy), scene (`id`), door (`device`), roomOff (`room`: the
-// room's All off) or offAll (`filters`: Home's Turn off all for lights, climate or blinds). `room`
-// is the room named, `device` ({ kind, id }) the device named, for the words shown; `kept` the
-// lights named for heating that "the lights" left out (heaters.js), to say so.
+// brightnessBy, temperatureBy, volumeBy, 1.11.0 positionBy, speedBy), scene (`id`), door
+// (`device`), roomOff (`room`: the room's All off) or offAll (`filters`: Home's Turn off all for
+// lights, climate or blinds). `room` is the room named, `device` ({ kind, id }) the device named,
+// for the words shown; `kept` the lights named for heating that "the lights" left out (heaters.js),
+// and `onOff` the lights that only turn on and off a room's level left out (1.10.3), to say so.
 
 import { isHeater } from "./heaters.js";
 
@@ -192,7 +193,9 @@ const ENGLISH_HEBREW = {
     ["pause", "pause השהה השהי השהו תשהה להשהות השהיה"],
     ["next", "next skip הבא הבאה דלג דלגי דלגו תדלג לדלג"],
     ["volume", "volume vol loudness ווליום וליום עוצמה עוצמת"],
-    ["level", "dim brightness level בהירות עמעם עמעמי עמעמו תעמעם לעמעם"],
+    // A fan's speed (1.11.0): "speed up the fan", "one speed up", "תגביר את המהירות".
+    ["speed", "speed speeds מהירות"],
+    ["level", "dim brightness level בהירות עמעם עמעמי עמעמו תעמעם תעמעמי תעמעמו לעמעם"],
     ["cool", "cool cooling קירור לקרר"],
     ["heat", "heat heating חימום לחמם"],
     ["auto", "auto automatic אוטומטי אוטו"],
@@ -225,6 +228,9 @@ const ENGLISH_HEBREW = {
     ["climate", -1, "cooler colder", true],
     ["music", 1, "louder", true],
     ["music", -1, "quieter softer", true],
+    // A fan a speed faster or slower (1.11.0).
+    ["fan", 1, "faster", true],
+    ["fan", -1, "slower", true],
     [null, 1, "increase הגבר הגבירי הגבירו תגביר תגבירי תגבירו להגביר הגברה", false],
     [null, -1, "decrease reduce הנמך הנמיכי הנמיכו תנמיך תנמיכי תנמיכו להנמיך הנמכה", false],
   ],
@@ -267,8 +273,19 @@ const ENGLISH_HEBREW = {
   make: "make תעשה תעשי תעשו עשה עשי עשו",
   // Said with these, a climate comparative is how the user feels ("I'm colder", "יותר חם לי").
   feelMarkers: "i im me feel feels feeling felt לי מרגיש מרגישה מרגישים מרגישות",
+  // Said with these, a climate comparative without the AC is how it is ("it's colder in the
+  // bedroom", "נהיה חם בסלון", "יותר מדי חם", "קר יותר בחוץ"), not what to do (1.11.0).
+  stateMarkers: "its getting gets got outside too here there נהיה נהייה נהיית נעשה נעשית חוץ פה כאן מדי מידי",
   // "More" or "less" with a word for warm or cold is warmer or cooler only in Hebrew ("יותר חם").
   moreFeel: "hebrew",
+  // "יותר מהר", "לאט יותר": a fan a speed faster or slower (1.11.0), either order in Hebrew.
+  adjectives: [
+    ["fan", 1, "מהר מהיר מהירה"],
+    ["fan", -1, "לאט איטי איטית"],
+  ],
+  adjectiveBefore: true,
+  // "עוד קצת": a bit more (alone, "עוד" is a time: "עוד 5 דקות").
+  stillMore: "עוד",
   // What parts a sentence, the words that may come before the next thing said, and the verbs that
   // start one (several things, below).
   separators: "and then ו וגם ואז ואת ,",
@@ -301,6 +318,8 @@ const ENGLISH_HEBREW = {
     ["ninety תשעים", 90, "tens"],
     ["hundred מאה", 100, "hundred"],
     ["half halfway חצי", 50, "half"],
+    // A quarter, three quarters (1.11.0): "dim the kitchen lights to a quarter", "לרבע".
+    ["quarter quarters רבע רבעים", 25, "fraction"],
   ],
   // "And a half" ("23 and a half", "23 וחצי").
   halves: "half חצי",
@@ -324,6 +343,7 @@ const SPANISH = {
     ["pause", "pausa pausar pausad pausen"],
     ["next", "siguiente próxima próximo salta salte saltad salten saltar"],
     ["volume", "volumen"],
+    ["speed", "velocidad velocidades"],
     ["level", "brillo intensidad nivel atenúa atenúe atenuad atenúen atenuar"],
     ["cool", "refrigeración refrigerar enfriamiento enfría enfríe enfriad enfríen enfriar"],
     ["heat", "calefacción calienta calentad calienten calentar"],
@@ -381,6 +401,7 @@ const SPANISH = {
   // "Pon música": play.
   put: "pon ponga poned pongan",
   feelMarkers: "tengo tenemos tiene tienen tienes siento sentimos siente sienten sientes me nos hace hacía estoy estamos está están",
+  stateMarkers: "aquí acá afuera fuera demasiado",
   moreFeel: "all",
   // "Más alta", "más oscuro": a comparative said in two words (with "más" or "menos").
   adjectives: [
@@ -388,7 +409,11 @@ const SPANISH = {
     [null, -1, "bajo baja bajito bajita flojo floja suave"],
     ["light", 1, "claro clara brillante luminoso luminosa"],
     ["light", -1, "oscuro oscura tenue"],
+    ["fan", 1, "rápido rápida deprisa"],
+    ["fan", -1, "lento lenta despacio"],
   ],
+  // "Más brillo", "más volumen": brighter, louder.
+  moreLevel: true,
   // "Sube la luz", "baja las luces": brighter, dimmer. "Sube el aire dos grados": warmer by that.
   upDownLight: true,
   upDownClimate: true,
@@ -422,7 +447,10 @@ const SPANISH = {
     ...["treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"].map((entry, index) => [entry, 30 + index * 10, "tens"]),
     ["cien ciento", 100, "hundred"],
     ["mitad", 50, "half"],
+    // "A un cuarto", "a tres cuartos" (1.11.0); alone, "cuarto" is a room.
+    ["cuarto cuartos", 25, "fraction"],
   ],
+  fractionNeedsUnit: true,
   // "Treinta y cinco".
   tensAnd: true,
   halves: "medio media",
@@ -447,6 +475,7 @@ const ITALIAN = {
     ["pause", "pausa"],
     ["next", "prossima prossimo successiva successivo avanti salta salti saltate saltare"],
     ["volume", "volume"],
+    ["speed", "velocità"],
     ["level", "luminosità intensità livello attenua attenui attenuate attenuare"],
     ["cool", "raffreddamento raffrescamento raffredda raffreddi raffreddate raffreddare rinfresca rinfrescare"],
     ["heat", "riscaldamento riscalda riscaldi riscaldate riscaldare"],
@@ -503,13 +532,17 @@ const ITALIAN = {
   // "Metti la musica": play.
   put: "metti metta mettete mettano",
   feelMarkers: "ho abbiamo ha hanno hai sento sentiamo sente sentono senti mi ci fa fanno sto stiamo",
+  stateMarkers: "qui qua fuori troppo",
   moreFeel: "all",
   adjectives: [
     [null, 1, "alto alta forte"],
     [null, -1, "basso bassa piano"],
     ["light", 1, "chiaro chiara luminoso luminosa"],
     ["light", -1, "scuro scura"],
+    ["fan", 1, "veloce veloci rapido rapida"],
+    ["fan", -1, "lento lenta lenti lente"],
   ],
+  moreLevel: true,
   upDownLight: true,
   upDownClimate: true,
   separators: "e ed poi ,",
@@ -535,7 +568,10 @@ const ITALIAN = {
     ...ITALIAN_TENS.flatMap(([tens, value]) => ITALIAN_UNITS.map(([unit, add]) => [`${/^[uo]/.test(unit) ? tens.slice(0, -1) : tens}${unit}`, value + add, "teen"])),
     ["cento", 100, "hundred"],
     ["metà", 50, "half"],
+    // "A un quarto", "a tre quarti" (1.11.0); alone, "quarto" is the fourth.
+    ["quarto quarti", 25, "fraction"],
   ],
+  fractionNeedsUnit: true,
   halves: "mezzo mezza",
   halfAnd: "e",
 };
@@ -596,8 +632,13 @@ function lexicon(spec) {
     make: foldedSet(spec.make),
     put: foldedSet(spec.put),
     feelMarkers: foldedSet(spec.feelMarkers),
+    stateMarkers: foldedSet(spec.stateMarkers),
     modeAfter: foldedSet(spec.modeAfter),
     moreFeel: spec.moreFeel,
+    moreLevel: Boolean(spec.moreLevel),
+    adjectiveBefore: Boolean(spec.adjectiveBefore),
+    stillMore: foldedSet(spec.stillMore),
+    fractionNeedsUnit: Boolean(spec.fractionNeedsUnit),
     upDownLight: Boolean(spec.upDownLight),
     upDownClimate: Boolean(spec.upDownClimate),
     separators: foldedSet(spec.separators),
@@ -634,7 +675,7 @@ const AT_PREFIX = /^[וש]?[במ]$/;
 const FILLER = { role: "filler" };
 // What a sentence does, as verbs: the verb of one part counts for another that says none.
 const DOING = new Set(["on", "off", "open", "close", "up", "down", "stop", "start", "run", "play", "pause", "next"]);
-const ACTING = new Set([...DOING, "volume", "level", "rel"]);
+const ACTING = new Set([...DOING, "volume", "speed", "level", "rel"]);
 
 // ---- numbers -------------------------------------------------------------------------------
 
@@ -649,11 +690,13 @@ function numberWord(token, lex) {
 }
 
 const isHalf = (token, lex) => Boolean(token) && token.bares.some((form) => lex.halves.has(form));
-const isUnit = (token, lex) => Boolean(token?.bares.some((form) => ["percent", "degrees"].includes(lex.roles.get(form)?.role)));
+// A unit after a number: percent, degrees, or a fan's speeds ("one speed up", 1.11.0).
+const isUnit = (token, lex) => Boolean(token?.bares.some((form) => ["percent", "degrees", "speed"].includes(lex.roles.get(form)?.role)));
 
 // The number that starts at tokens[index] (digits, or words: "twenty three", "עשרים ושלוש",
 // "שלוש עשרה", "treinta y cinco", "ventitré", "23 and a half", "23 וחצי", "23 y medio", "22 e
-// mezzo"), and where it ends; null when none starts there.
+// mezzo", 1.11.0: "a quarter", "three quarters", "רבע", "un cuarto", "tre quarti"), and where it
+// ends; null when none starts there.
 function readNumber(tokens, index, names, lex) {
   const first = tokens[index];
   let value = null;
@@ -667,10 +710,17 @@ function readNumber(tokens, index, names, lex) {
     if (!found) return null;
     const next = numberWord(tokens[end], lex);
     if (found.type === "half") return { value: 50, end, prefix: found.prefix, half: true };
+    // A quarter alone ("to a quarter", "לרבע"); in Spanish and Italian only after a number ("un
+    // cuarto", "tre quarti"): alone, "cuarto" is a room and "quarto" the fourth.
+    if (found.type === "fraction") return lex.fractionNeedsUnit ? null : { value: found.value, end, prefix: found.prefix };
     value = found.value;
     prefix = found.prefix;
     const after = lex.tensAnd && lex.halfAnd.has(tokens[end]?.raw) ? numberWord(tokens[end + 1], lex) : null;
-    if (found.type === "tens" && next?.type === "unit" && next.value > 0) {
+    if (found.type === "unit" && next?.type === "fraction" && found.value > 0 && found.value < 4) {
+      // "Three quarters", "שלושה רבעים", "un cuarto", "tres cuartos", "tre quarti".
+      value *= next.value;
+      end += 1;
+    } else if (found.type === "tens" && next?.type === "unit" && next.value > 0) {
       value += next.value;
       end += 1;
     } else if (found.type === "tens" && after?.type === "unit" && after.value > 0) {
@@ -719,7 +769,9 @@ function tokenize(text, names, lex) {
       const display = words.slice(index, number.end).map((item) => item.display).join(" ");
       const before = words[index - 1];
       const prefix = AT_PREFIX.test(number.prefix) ? number.prefix : before && AT_PREFIX.test(before.raw) ? before.raw : null;
-      const at = prefix ? "by" : atBefore(words, index, lex) ? "at" : null;
+      // "At a quarter" is a time too (1.11.0: "at a quarter to seven").
+      const article = Boolean(lex.halfArticle) && before?.raw === lex.halfArticle;
+      const at = prefix ? "by" : atBefore(words, index, lex) || (article && atBefore(words, index - 1, lex)) ? "at" : null;
       // `byPrefix`: ב ("by 2 degrees" with a change by a step) or מ ("from": never an amount).
       tokens.push({ ...word(display), raw: `#${number.value}`, stem: "", bares: [], stems: [], num: number.value, digits: words[index].num !== null && number.end === index + 1, at, byPrefix: prefix ? prefix.slice(-1) : null, half: Boolean(number.half) });
       index = number.end;
@@ -727,7 +779,9 @@ function tokenize(text, names, lex) {
       // A number word kept as a word still matches a number in a name ("Bedroom two"); with ב or
       // מ in front ("בשבע"), or after a word for a time ("a las siete", "alle sette"), it is a
       // time, unless it is in a name ("בשני").
-      const found = numberWord(words[index], lex);
+      // "Cuarto", "quarto" alone are a room and the fourth, not a quarter (1.11.0).
+      const spoken = numberWord(words[index], lex);
+      const found = spoken?.type === "fraction" && lex.fractionNeedsUnit ? null : spoken;
       // "En un 25%": before a number, "un" is "a", not one (o'clock is "la una": "a la una 20%").
       const article = words[index].raw === "un" && words[index + 1]?.num != null && lex.at.has(words[index - 1]?.raw);
       const atWord = Boolean(found && !article && (AT_PREFIX.test(found.prefix) || atBefore(words, index, lex)));
@@ -976,11 +1030,15 @@ function saidWhole(match, tokens) {
 const MAX_OPTIONS = 6;
 const TIE = 0.05;
 // A change by a step: lights 20 points, the AC 1°, the music 10, unless an amount is said
-// ("by 30%", "2 degrees warmer"); the AC at most 10° at once.
+// ("by 30%", "2 degrees warmer"); the AC at most 10° at once. 1.11.0: blinds 20 points of their
+// position, a fan one of its own speeds (or the speeds said, "two speeds faster": at most 4).
 const LIGHT_STEP = 20;
 const DEGREE_STEP = 1;
 const MUSIC_STEP = 10;
 const MAX_DEGREE_STEP = 10;
+const BLIND_STEP = 20;
+const FAN_STEP = 1;
+const MAX_FAN_STEP = 4;
 
 function devicesOf(catalog, kind, roomId = undefined) {
   return (catalog.devices || []).filter((device) => KIND_OF[device.kind] === kind && (roomId === undefined || device.room === roomId));
@@ -1017,13 +1075,19 @@ function refusalOf(tokens, position) {
 }
 
 const isDim = (token, lex) => token.role?.role === "level" && token.bares.some((form) => lex.dim.has(form));
-const isMarker = (token, lex) => ["rel", "up", "down"].includes(token.role?.role) || isDim(token, lex);
+// Words that make a number with its unit an amount ("by 20%"): a step's words, up and down, "dim",
+// and (1.11.0) open and close ("open the blinds by 20%").
+const isMarker = (token, lex) => ["rel", "up", "down", "open", "close"].includes(token.role?.role) || isDim(token, lex);
 
 // A change by a step, said with its words (1.10.0, ADR-066): "more light", "יותר חם", "a bit
 // brighter", "dim … a bit", "by 20%", "ב-2 מעלות", "2 degrees warmer", "más luz", "más alta",
 // "sube el aire dos grados", "alza la luce del 20%". The words that make it are given the role
 // "rel" (a kind and a direction), an amount said with them is marked, and what is left of "more",
-// "less", "a bit" and "by" stays a change by an amount that is not done.
+// "less", "a bit" and "by" stays a change by an amount that is not done. 1.11.0 (ADR-079): blinds
+// and fans too ("open the blinds a bit", "close … a little more", "faster", "turn the fan up a
+// bit", "más rápido"); a word that made a step for them is marked `stepWord`, so that a sentence
+// they leave not understood (a door: "open the gate a bit") is still refused as a change by an
+// amount (readPart).
 function relativeRoles(tokens, lex) {
   for (const [position, token] of tokens.entries()) {
     const modifier = token.role?.modifier;
@@ -1035,47 +1099,60 @@ function relativeRoles(tokens, lex) {
       token.role = { role: "rel", kind: "light", dir: sign, comparative: true };
       continue;
     }
-    if (lex.adjectives.size && next) {
-      // "Más brillo", "più luminosità": the light; "más volumen", "meno volume": the music.
-      if (next.role?.role === "level" && !isDim(next, lex)) {
-        token.role = { role: "rel", kind: "light", dir: sign, comparative: true };
-        continue;
-      }
-      if (next.role?.role === "volume") {
-        token.role = { role: "rel", kind: "music", dir: sign, comparative: true };
-        continue;
-      }
-      // "Más alta", "più forte", "más oscuro": a comparative in two words.
-      const adjective = lex.adjectives.get(next.raw);
-      if (adjective) {
-        token.role = { role: "rel", kind: adjective.kind, dir: sign * adjective.dir, comparative: true };
-        next.role = FILLER;
-        continue;
-      }
+    // "Más brillo", "più luminosità": the light; "más volumen", "meno volume": the music.
+    if (lex.moreLevel && next?.role?.role === "level" && !isDim(next, lex)) {
+      token.role = { role: "rel", kind: "light", dir: sign, comparative: true };
+      continue;
+    }
+    if (lex.moreLevel && next?.role?.role === "volume") {
+      token.role = { role: "rel", kind: "music", dir: sign, comparative: true };
+      continue;
+    }
+    // "Más alta", "più forte", "más oscuro", "más rápido", "יותר מהר" (and in Hebrew "מהר יותר"):
+    // a comparative in two words.
+    const adjacent = lex.adjectiveBefore ? [next, tokens[position - 1]] : [next];
+    const word = adjacent.find((other) => other && lex.adjectives.has(other.raw));
+    if (word) {
+      const adjective = lex.adjectives.get(word.raw);
+      token.role = { role: "rel", kind: adjective.kind, dir: sign * adjective.dir, comparative: true };
+      word.role = FILLER;
+      continue;
     }
     // "יותר חם", "קר יותר", "más frío", "più caldo": the AC warmer or cooler (a sentence that
     // names the AC: intent).
-    if (lex.moreFeel === "hebrew" && !HEBREW.test(token.raw)) continue;
-    const feel = [next, tokens[position - 1]].find((other) => other?.role?.role === "feel");
-    if (!feel) continue;
-    token.role = { role: "rel", kind: "climate", dir: sign * (feel.role.mode === "heat" ? 1 : -1), comparative: true };
-    feel.role = FILLER;
+    const feel = lex.moreFeel === "hebrew" && !HEBREW.test(token.raw) ? null : [next, tokens[position - 1]].find((other) => other?.role?.role === "feel");
+    if (feel) {
+      token.role = { role: "rel", kind: "climate", dir: sign * (feel.role.mode === "heat" ? 1 : -1), comparative: true };
+      feel.role = FILLER;
+      continue;
+    }
+    // "Open the blinds more", "close … a little more", "abre más la persiana", "תפתח יותר את
+    // התריס", "turn the fan up more" (1.11.0): the verb is the step. Never "less" ("open the
+    // blinds less" is not clear).
+    const step = modifier === "more" ? deviceStep(tokens) : null;
+    if (step) {
+      step.token.role = { role: "rel", kind: step.kind, dir: step.dir, comparative: true };
+      token.role = FILLER;
+      token.stepWord = true;
+    }
   }
   // An amount: a number with its unit, said with "by" or ב ("by 20%", "ב-2 מעלות"; "un 20%", "en
   // 2 grados", "del 20%", "di 2 gradi"), or next to a comparative ("2 degrees warmer"), and only
   // with a word for a change by a step. In Spanish and Italian, degrees said right after up or
   // down are the step too ("sube el aire dos grados"): a temperature is said with "a" ("baja el
-  // aire a 22"), and no AC is set to 2°.
+  // aire a 22"), and no AC is set to 2°. A fan's speeds right after up or down too ("one speed
+  // up", "two speeds faster", 1.11.0).
   if (tokens.some((token) => isMarker(token, lex))) {
     const comparative = tokens.some((token) => token.role?.role === "rel" && token.role.comparative);
-    const upDown = lex.upDownClimate && tokens.some((token) => token.role?.role === "up" || token.role?.role === "down");
+    const upOrDown = tokens.some((token) => token.role?.role === "up" || token.role?.role === "down");
+    const upDown = lex.upDownClimate && upOrDown;
     for (const [position, token] of tokens.entries()) {
       if (token.num === null || token.carried) continue;
       const unit = tokens[position + 1]?.role?.role;
       const before = tokens[position - 1];
       // "By", "un", "del", "di": never a word of a time ("a la una 20%" keeps its time).
       const byWord = before?.role?.modifier === "by" || Boolean(before && lex.byWords.has(before.raw) && !before.atWord && before.role?.role !== "time");
-      if (unit !== "percent" && unit !== "degrees") {
+      if (unit !== "percent" && unit !== "degrees" && unit !== "speed") {
         // An amount needs its unit ("alza il volume di 10", "sube la luz un 20", "brighter by 30"):
         // refused as a change by an amount, never a level of 10 (1.10.0).
         if (byWord && token.at === null) token.at = "by";
@@ -1085,9 +1162,12 @@ function relativeRoles(tokens, lex) {
       // In Spanish and Italian a number with its unit right after up or down, with no "a" or "al"
       // before it, is the step: "baja el aire dos grados", "sube la luz de la cocina 20%" (a level
       // is said with "a": "sube la luz al 80%", "hasta el 60%").
-      const near = token.at === null && !afterTarget(tokens, position, lex) && (comparative || (upDown && (unit === "degrees" || lex.upDownLight)));
+      const near = token.at === null && !afterTarget(tokens, position, lex) && (comparative || (upDown && (unit === "degrees" || lex.upDownLight)) || (upOrDown && unit === "speed"));
       if (!byWord && !byPrefix && !near) continue;
       token.amount = unit;
+      // With ב alone ("ב-20%"), which is "at" as often as "by", only for a step's own words (1.11.0).
+      token.amountPrefix = byPrefix && !byWord && !near;
+      token.stepWord = true;
       tokens[position + 1].amountUnit = true;
       if (byWord) before.role = FILLER;
       // "Dim the lights by 20%": dimmer by that much.
@@ -1097,44 +1177,79 @@ function relativeRoles(tokens, lex) {
   // "A bit", "a little", "קצת": with a change by a step ("a bit brighter"), or "dim" ("dim the
   // lights a bit").
   // In Spanish and Italian also with up or down and the light, the music or the temperature said
-  // ("baja un poco la luz", "alza un po' la musica"; not the blinds: "sube un poco la persiana").
-  for (const token of tokens) {
+  // ("baja un poco la luz", "alza un po' la musica"). In every language (1.11.0) with open, close,
+  // up or down for the blinds ("open the blinds a bit", "sube un poco la persiana", "תפתח קצת את
+  // התריס") and up or down for a fan ("turn the fan up a bit"); "עוד קצת" is a bit more.
+  for (const [position, token] of tokens.entries()) {
     if (token.role?.modifier !== "bit") continue;
     if (!tokens.some((other) => other.role?.role === "rel")) {
       const dim = tokens.find((other) => isDim(other, lex));
       const upDown = lex.upDownLight ? tokens.find((other) => other.role?.role === "up" || other.role?.role === "down") : null;
       const kind = upDown ? bitKind(tokens) : null;
+      const step = dim || kind ? null : deviceStep(tokens);
       if (dim) dim.role = { role: "rel", kind: "light", dir: -1, comparative: true };
       else if (kind) upDown.role = { role: "rel", kind, dir: upDown.role.role === "up" ? 1 : -1, comparative: false };
-      else continue;
+      else if (step) {
+        step.token.role = { role: "rel", kind: step.kind, dir: step.dir, comparative: false };
+        token.stepWord = true;
+      } else continue;
     }
     token.role = FILLER;
+    const before = tokens[position - 1];
+    if (before && lex.stillMore.has(before.raw)) before.role = FILLER;
   }
   // How warm the user feels is never a change ("make it warmer for me", "יותר חם לי"), nor how
-  // warm it is ("it's colder in the bedroom"): warmer and cooler only with the AC said (AC,
-  // temperature, מזגן, aire) or "make" (haz, pon, fai, metti).
+  // warm it is ("it's colder in the bedroom", "נהיה חם בסלון"): those are feelings, refused.
+  // Without the AC said (AC, temperature, מזגן, aire) or "make" (haz, pon, fai, metti), warmer and
+  // cooler are for one thermostat only (1.11.0, ADR-079): `unnamed` (intent).
   const feels = tokens.some((token) => lex.feelMarkers.has(token.raw));
   const saysAC = tokens.some((token) => token.role?.role === "kind" && token.role.kind === "climate");
-  if (feels || !(saysAC || tokens.some((token) => lex.make.has(token.raw)))) {
-    for (const token of tokens) {
-      if (token.role?.role === "rel" && token.role.kind === "climate") token.role = { role: "feel", mode: token.role.dir > 0 ? "heat" : "cool" };
-    }
+  const unnamed = !(saysAC || tokens.some((token) => lex.make.has(token.raw)));
+  const states = unnamed && tokens.some((token) => token.bares.some((form) => lex.stateMarkers.has(form)));
+  for (const token of tokens) {
+    if (token.role?.role !== "rel" || token.role.kind !== "climate") continue;
+    if (feels || states) token.role = { role: "feel", mode: token.role.dir > 0 ? "heat" : "cool" };
+    else if (unnamed) token.role = { ...token.role, unnamed: true };
   }
+}
+
+// The kinds a sentence names by their words: the light (also brightness), the music (also the
+// volume), the temperature, the AC alone ("ac"), blinds, fans (also a speed), doors.
+function kindsSaid(tokens) {
+  const kinds = new Set();
+  for (const token of tokens) {
+    // "La del salón": the kind it stands for.
+    const role = token.role?.role === "pronoun" && token.refers ? token.refers : token.role;
+    if ((role?.role === "kind" && role.kind === "light") || role?.role === "level") kinds.add("light");
+    else if ((role?.role === "kind" && role.kind === "music") || role?.role === "volume") kinds.add("music");
+    else if (role?.role === "kind" && role.temperature) kinds.add("climate");
+    else if (role?.role === "speed") kinds.add("fan");
+    // The AC alone ("sube un poco el aire"): more cooling, or warmer? Not clear.
+    else if (role?.role === "kind") kinds.add(role.kind === "climate" ? "ac" : role.kind);
+  }
+  return kinds;
 }
 
 // What "a bit" up or down is said of: the light, the music or the temperature, only one of them.
 function bitKind(tokens) {
-  const kinds = new Set();
-  for (const token of tokens) {
-    const role = token.role;
-    if ((role?.role === "kind" && role.kind === "light") || role?.role === "level") kinds.add("light");
-    else if ((role?.role === "kind" && role.kind === "music") || role?.role === "volume") kinds.add("music");
-    else if (role?.role === "kind" && role.temperature) kinds.add("climate");
-    // The AC alone ("sube un poco el aire"): more cooling, or warmer? Not clear.
-    else if (role?.role === "kind") kinds.add(role.kind === "climate" ? "ac" : role.kind);
-  }
+  const kinds = kindsSaid(tokens);
   const [kind] = kinds;
   return kinds.size === 1 && ["light", "music", "climate"].includes(kind) ? kind : null;
+}
+
+// A step for blinds or a fan, said with "a bit" or "more" (1.11.0): open, close, up or down with
+// the blinds (by a word, or by a name or a room: no other kind said), up or down with a fan said.
+// { token: the verb, kind, dir }, or null. Doors and gates never take a step (kindIntent).
+function deviceStep(tokens) {
+  const kinds = kindsSaid(tokens);
+  const blinds = [...kinds].every((kind) => kind === "blind");
+  const opener = tokens.find((token) => token.role?.role === "open" || token.role?.role === "close");
+  if (opener) return blinds ? { token: opener, kind: "blind", dir: opener.role.role === "open" ? 1 : -1 } : null;
+  const upDown = tokens.find((token) => token.role?.role === "up" || token.role?.role === "down");
+  if (!upDown) return null;
+  const dir = upDown.role.role === "up" ? 1 : -1;
+  if (kinds.size === 1 && kinds.has("fan")) return { token: upDown, kind: "fan", dir };
+  return blinds ? { token: upDown, kind: "blind", dir } : null;
 }
 
 // The words left over once the names are taken out: what they ask, or null when they contradict
@@ -1147,7 +1262,7 @@ function summarize(tokens, taken, lex) {
     if (token.carried || token.amountUnit) continue;
     if (token.amount) {
       if (summary.amount) return null;
-      summary.amount = { value: token.num, unit: token.amount };
+      summary.amount = { value: token.num, unit: token.amount, prefix: Boolean(token.amountPrefix) };
       continue;
     }
     if (refusalOf(tokens, position)) return null;
@@ -1183,7 +1298,8 @@ function summarize(tokens, taken, lex) {
       // Brighter and dimmer at once, or the lights and the AC: not one change.
       const before = summary.rel;
       if (before && (before.dir !== role.dir || (before.kind && role.kind && before.kind !== role.kind))) return null;
-      summary.rel = { kind: before?.kind || role.kind || null, dir: role.dir, comparative: Boolean(before?.comparative || role.comparative) };
+      // `unnamed`: warmer or cooler with no AC said (1.11.0).
+      summary.rel = { kind: before?.kind || role.kind || null, dir: role.dir, comparative: Boolean(before?.comparative || role.comparative), unnamed: Boolean(before?.unnamed || role.unnamed) };
     } else if (role.role !== "filler") {
       summary.actions.add(role.role);
       // "תעלה את המזגן": in Hebrew, the AC up is warmer (in English "turn up the AC" is not clear).
@@ -1206,13 +1322,16 @@ function summarize(tokens, taken, lex) {
   if (summary.numbers.length > 1 || summary.modes.size > 1 || summary.units.size > 1) return null;
   // "Quella luce": with its kind said, "that" is only a word.
   if (summary.kinds.size) summary.pronoun = null;
+  // A step to a level (1.11.0): "brighter to 80%", "louder to 40", "warmer to 23", "תגביר את האור
+  // ל-80%": the level said with "to", as "kitchen lights to 80%" (the step's word says the kind).
+  if (summary.rel && summary.numbers.length && summary.numberTo && !summary.amount) summary.rel = { ...summary.rel, level: true };
   return summary;
 }
 
 // The one thing the leftover words do: on, off, open, close, up, down, stop, start, run, play,
 // pause, next; volume and level go with a number. null: none; false: two that contradict.
 function verb(summary) {
-  const main = [...summary.actions].filter((item) => item !== "volume" && item !== "level");
+  const main = [...summary.actions].filter((item) => item !== "volume" && item !== "level" && item !== "speed");
   if (main.length > 1) {
     // "run" and "start" say the same, as do "start" and "on".
     const same = new Set(main.map((item) => (item === "start" || item === "run" ? "start" : item)));
@@ -1281,8 +1400,10 @@ function kindIntent(kind, targets, where, summary, act) {
   const named = where.device;
   const percent = (value) => (value < 0 || value > 100 ? problem("range", { min: 0, max: 100, unit: "percent", device: named }) : Math.round(value));
   const rel = summary.rel;
-  // A change by a step: its words, or an amount said with ב or "by" (then only with them).
-  const stepped = Boolean(rel || summary.amount);
+  // A change by a step: its words, or an amount said with ב or "by" (then only with them). A step's
+  // word with a level said with "to" is that level (1.11.0: "brighter to 80%"), for its own kind.
+  if (rel?.level && rel.kind && rel.kind !== kind) return null;
+  const stepped = Boolean((rel && !rel.level) || summary.amount);
 
   if (kind === "light") {
     if (unit === "degrees" || summary.modes.size) return null;
@@ -1290,7 +1411,12 @@ function kindIntent(kind, targets, where, summary, act) {
     // ADR-066): `kept` says which, to say so.
     const kept = named ? [] : targets.filter(isHeater);
     const lights = named ? targets : targets.filter((device) => !isHeater(device));
-    const lightAction = (list, change) => action("lights", { ...where, ids: list.map((device) => device.id), change, ...(kept.length ? { kept: kept.map((device) => device.id) } : {}) });
+    // A level or a step for a room's lights goes to its dimmers; `onOff` the lights that only turn on
+    // and off, left as they are, to say so (1.10.3; 1.11.0).
+    const lightAction = (list, change) => {
+      const onOff = named || !("brightness" in change || "brightnessBy" in change) ? [] : lights.filter((device) => device.dimmable === false);
+      return action("lights", { ...where, ids: list.map((device) => device.id), change, ...(kept.length ? { kept: kept.map((device) => device.id) } : {}), ...(onOff.length ? { onOff: onOff.map((device) => device.id) } : {}) });
+    };
     const none = () => (kept.length ? problem("heatersOnly", { room: where.room }) : problem("none", { kind, room: where.room }));
     // "Sube la luz", "abbassa le luci": in Spanish and Italian a step brighter or dimmer (in
     // English, "raise the lights" is on).
@@ -1343,9 +1469,10 @@ function kindIntent(kind, targets, where, summary, act) {
     if (stepped || (upDown && number === null)) {
       if (rel ? rel.kind !== "climate" || act !== null : !upDown) return null;
       if (number !== null || summary.modes.size) return null;
-      // A comparative with the AC said (by a word or its name) or "make": "warmer in the bedroom"
-      // may say how it is, not what to do.
-      if (rel && !(summary.kinds.has("climate") || summary.named || summary.make)) return null;
+      // A comparative with the AC said (by a word or its name) or "make"; since 1.11.0 without them
+      // too (`unnamed`) for the one thermostat of a room or of the home (intent): how it is ("it's
+      // warmer in the bedroom") or how one feels is refused before (relativeRoles).
+      if (rel && !(summary.kinds.has("climate") || summary.named || summary.make || rel.unnamed)) return null;
       const step = stepOf(summary, "degrees", DEGREE_STEP);
       if (step === null) return null;
       if (!(step > 0 && step <= MAX_DEGREE_STEP)) return problem("step", { max: MAX_DEGREE_STEP });
@@ -1401,7 +1528,23 @@ function kindIntent(kind, targets, where, summary, act) {
   }
 
   if (kind === "blind") {
-    if (unit === "degrees" || summary.modes.size || stepped) return null;
+    if (unit === "degrees" || summary.modes.size) return null;
+    // A step (1.11.0, ADR-079): "open the blinds a bit", "close … a little more", "raise the blinds
+    // by 20%", "sube la persiana un 20%": 20 points of their position, or the percent said, from
+    // where each one is; only blinds that stop between open and closed.
+    if (stepped) {
+      // "תעלה את התריס ב-20%": to 20%, or by 20%? Not clear (ב is "at" and "by" alike); "ב-20% יותר"
+      // is a step.
+      if (rel ? rel.kind !== "blind" : summary.amount?.prefix) return null;
+      const dir = rel ? rel.dir : { open: 1, up: 1, close: -1, down: -1 }[act];
+      if (!dir || (rel && act !== null) || number !== null) return null;
+      const by = stepOf(summary, "percent", BLIND_STEP);
+      if (by === null) return null;
+      if (!(by > 0 && by <= 100)) return problem("range", { min: 0, max: 100, unit: "percent", device: named });
+      const blinds = targets.filter((device) => device.position !== false);
+      if (!blinds.length) return problem("noPosition", { device: named, room: where.room });
+      return action("blinds", { ...where, ids: blinds.map((device) => device.id), change: { positionBy: dir * Math.round(by) } });
+    }
     if (act === "stop") return number === null ? action("blinds", { ...where, ids, change: { stop: true } }) : null;
     let position = null;
     if (number !== null) {
@@ -1420,7 +1563,26 @@ function kindIntent(kind, targets, where, summary, act) {
   }
 
   if (kind === "fan") {
-    if (number !== null || summary.modes.size || stepped) return null;
+    if (summary.modes.size || summary.units.size) return null;
+    // Faster or slower (1.11.0, ADR-079): "faster", "slower", "turn the fan up", "speed up the fan",
+    // "one speed up", "two speeds faster", "תגביר את המאוורר", "más rápido", "più veloce": one of
+    // each fan's own speeds, or the speeds said (at most 4), from where each one is.
+    const said = summary.kinds.has("fan") || summary.actions.has("speed") || summary.amount?.unit === "speed" || Boolean(named);
+    const upDown = (act === "up" || act === "down") && said;
+    if (stepped || upDown) {
+      if (rel ? (rel.kind && rel.kind !== "fan") || (act !== null && !upDown) : !upDown) return null;
+      if (number !== null || (rel && !rel.kind && !said)) return null;
+      // "Turn the fan down faster": two ways at once.
+      if (rel && upDown && rel.dir !== (act === "up" ? 1 : -1)) return null;
+      const by = stepOf(summary, "speed", FAN_STEP);
+      if (by === null || !Number.isInteger(by) || by < 1 || by > MAX_FAN_STEP) return null;
+      const dir = rel ? rel.dir : act === "up" ? 1 : -1;
+      // A fan that lists no speeds only turns on and off.
+      const fans = targets.filter((device) => !Array.isArray(device.speeds) || device.speeds.length > 0);
+      if (!fans.length) return problem("noSpeeds", { device: named, room: where.room });
+      return action("fans", { ...where, ids: fans.map((device) => device.id), change: { speedBy: dir * by } });
+    }
+    if (number !== null) return null;
     if (act === "on" || act === "start") return action("fans", { ...where, ids, change: { on: true } });
     if (act === "off") return action("fans", { ...where, ids, change: { on: false } });
     return act === null ? problem("needWhat", { kind, room: where.room, device: named }) : null;
@@ -1519,6 +1681,9 @@ function intent(target, room, summary, catalog) {
     if (kinds.length && kinds[0] !== target.entity.kind) return null;
     if (room && device.room !== roomId) return null;
     if (summary.all || summary.everything) return null;
+    // Warmer or cooler with no AC said: a thermostat named by its own words ("VRF warmer"), not by
+    // its room's ("warmer in the bedroom" is the room's, below).
+    if (summary.rel?.unnamed && target.entity.kind === "climate" && !summary.named) return null;
     return kindIntent(target.entity.kind, [device], { room: null, device: { kind: device.kind, id: device.id } }, summary, act);
   }
 
@@ -1533,6 +1698,8 @@ function intent(target, room, summary, catalog) {
   const byMode = !kind && summary.modes.size > 0;
   if (!kind && summary.modes.size) kind = "climate";
   if (!kind && summary.units.has("degrees")) kind = "climate";
+  // "Speed up", "one speed up": a fan (1.11.0).
+  if (!kind && (summary.actions.has("speed") || summary.amount?.unit === "speed")) kind = "fan";
   if (!kind && (summary.actions.has("volume") || ["play", "pause", "next"].includes(act))) kind = "music";
   if (!kind && summary.actions.has("level")) kind = "light";
   if (!kind && room && ["open", "close", "up", "down", "stop"].includes(act)) {
@@ -1563,6 +1730,9 @@ function intent(target, room, summary, catalog) {
   }
   if (room) {
     if (!targets.length) return problem("none", { kind, room: roomId });
+    // Warmer or cooler with no AC said (1.11.0, ADR-079): the room's one thermostat; of two or
+    // more (an AC and floor heating), which one.
+    if (kind === "climate" && summary.rel?.unnamed && targets.length > 1) return whichOne(kind, targets, summary, act);
     return kindIntent(kind, targets, { room: roomId, device: null }, summary, act);
   }
   // The whole home: Turn off all for lights, AC and blinds; otherwise one device of the kind, or
@@ -1593,6 +1763,17 @@ function intent(target, room, summary, catalog) {
   if (each.every((item) => item.status === "problem")) return each[0];
   if (kind === "light" || each.length > MAX_OPTIONS || each.some((item) => item.status !== "ok")) return problem("needRoom", { kind });
   return { status: "ask", question: "which", options: each.map((item) => item.action) };
+}
+
+// Which one of a room's devices: each that can do what was said is an option (none: why the first
+// one cannot).
+function whichOne(kind, targets, summary, act) {
+  const each = targets.map((device) => kindIntent(kind, [device], { room: null, device: { kind: device.kind, id: device.id } }, summary, act));
+  if (each.some((item) => !item)) return null;
+  const options = each.filter((item) => item.status === "ok").map((item) => item.action);
+  if (!options.length) return each[0];
+  if (options.length > MAX_OPTIONS) return problem("tooMany");
+  return { status: "ask", question: "which", options };
 }
 
 // What two results do, to tell readings that differ from readings that come to the same.
@@ -1681,7 +1862,9 @@ function readPart(input, prepared) {
     const covered = new Set(matches.flatMap((match) => [...match.positions]));
     // Don't, a time, how warm one feels: refused, whatever else was said; also when a name has the
     // word ("apaga la isla mañana" with a scene "Mañana"): no reading used it (1.10.0).
-    const refusal = tokens.map((_token, position) => refusalOf(tokens, position)).find(Boolean);
+    // A step for blinds or a fan that nothing took ("open the gate a bit": doors take none) is still
+    // a change by an amount (1.11.0).
+    const refusal = tokens.map((_token, position) => refusalOf(tokens, position)).find(Boolean) || (tokens.some((token) => token.stepWord) ? "time" : null);
     if (refusal) return { status: "unknown", words: [], refusal };
     // "La del salón" with no kind before it: those words are not understood.
     const lone = (token) => token?.role?.role === "pronoun" && !token.refers && !kindWords.length;
@@ -1712,8 +1895,8 @@ function readPart(input, prepared) {
 
 // ---- several things in one sentence (1.10.0, ADR-066) -------------------------------------------
 
-// At most three things a sentence.
-export const MAX_PARTS = 3;
+// At most five things a sentence (three until 1.11.0).
+export const MAX_PARTS = 5;
 // What parts a sentence ("and", ",", "ואז", "וגם", "ואת", "y", "e", "poi": a language's
 // `separators`), the words that may come before the next thing said ("and the blinds", "ואת
 // התריסים": `leads`), and the verbs that start it ("and set the AC to 23": `verbs`).
@@ -1749,7 +1932,9 @@ function startsSomething(tokens, from, end, rest, { entities, lex }) {
   for (let index = from; index < end; index += 1) {
     const token = index === from && rest ? rest : tokens[index];
     const role = token.role?.role;
-    if (role === "kind" || ACTING.has(role) || token.bares?.some((form) => lex.verbs.has(form))) return true;
+    // A word for warm or cold too ("…, יותר קר", "…, más frío": a step, 1.11.0; or a feeling, which
+    // refuses the sentence).
+    if (role === "kind" || role === "feel" || ACTING.has(role) || token.bares?.some((form) => lex.verbs.has(form))) return true;
     const kinds = nameKinds(token, entities);
     if (kinds.thing && !kinds.room) return true;
     if (kinds.room || role === "filler" || role === "all" || role === "everything" || token.role?.modifier || lex.leads.has(token.raw)) continue;
@@ -1873,7 +2058,7 @@ function needsVerb(tokens) {
   return !tokens.some((token) => token.num !== null || ACTING.has(token.role?.role) || ["cool", "heat", "auto", "feel"].includes(token.role?.role));
 }
 
-// What two or three parts do: each read alone, with the room said in another part when it says
+// What two to five parts do: each read alone, with the room said in another part when it says
 // none (forward, and back to the part before when they share one verb: "turn off the lights and
 // the AC in the living room"), and the verb of another part when it has none. All or nothing.
 function readSeveral(parts, prepared) {
@@ -1883,6 +2068,9 @@ function readSeveral(parts, prepared) {
       room: said.tokens,
       inName: said.inName,
       verb: part.tokens.filter((token) => DOING.has(token.role?.role)),
+      // "A bit", "more": they go with the verb to a part that has none (1.11.0: "open the kitchen
+      // blinds a bit and the living room blinds").
+      bits: part.tokens.filter((token) => token.role?.modifier === "bit" || token.role?.modifier === "more"),
       needsVerb: needsVerb(part.tokens),
       all: part.tokens.some((token) => ["all", "everything"].includes(token.role?.role)),
     };
@@ -1903,11 +2091,22 @@ function readSeveral(parts, prepared) {
   const results = [];
   // Each part's kind of device, for "la del salón" in the part after it.
   const kinds = [];
+  const carriedRoom = (index) => (roomFrom[index] === null ? [] : info[roomFrom[index]].room.map((token) => ({ ...token, carried: true })));
+  // The verb a part lends (1.11.0): a step's verb only with its "a bit" or "more"; a step by an
+  // amount lends none ("open the kitchen blinds by 20% and the living room blinds": the second
+  // part is not clear, rather than opened fully).
+  const lent = (lender) => {
+    const own = results[lender] || readPart([...parts[lender].tokens, ...carriedRoom(lender)], prepared);
+    const item = own.status === "ok" ? own.action : own.status === "ask" ? own.options[0] : null;
+    const step = Object.keys(item?.change || {}).some((key) => key.endsWith("By"));
+    if (!step) return info[lender].verb;
+    return info[lender].bits.length ? [...info[lender].verb, ...info[lender].bits] : [];
+  };
   for (const [index, part] of parts.entries()) {
     const refers = index > 0 ? kinds[index - 1] : null;
     const tokens = part.tokens.map((token) => (token.role?.role === "pronoun" ? { ...token, refers } : token));
-    const room = roomFrom[index] === null ? [] : info[roomFrom[index]].room.map((token) => ({ ...token, carried: true }));
-    const verb = verbFrom[index] === null ? [] : info[verbFrom[index]].verb;
+    const room = carriedRoom(index);
+    const verb = verbFrom[index] === null ? [] : lent(verbFrom[index]);
     let result;
     if (!verb.length) {
       result = readPart([...tokens, ...room], prepared);
@@ -2053,7 +2252,8 @@ function readSentence(sentence, prepared) {
   const tokens = tokenize(sentence, prepared.names, lex);
   // A period or a comma at the end ("Kitchen lights off.") says nothing.
   while (tokens.length && tokens[tokens.length - 1].raw === ",") tokens.pop();
-  if (!tokens.length || tokens.length > 30) return { status: "unknown", words: [] };
+  // Five things take more words than three did (30 until 1.11.0); 200 letters stay the limit.
+  if (!tokens.length || tokens.length > 50) return { status: "unknown", words: [] };
   // A question mark makes it a question ("האור במטבח כבוי?", "kitchen lights off?", "¿está
   // encendida la luz?"): Hebrew, Spanish and Italian ask yes or no without a question word, and
   // dictation writes "?" for a rising voice.

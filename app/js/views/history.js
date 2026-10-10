@@ -377,6 +377,8 @@ export function outcomeText(entry) {
   if (entry.via) parts.push(t("history.via", { scene: isolate(entry.via) }));
   // A door opened in answer to an ask-to-open link (1.8.0).
   if (entry.kind === "door" && entry.ids?.link_id) parts.push(entry.note ? t("history.answered", { label: isolate(entry.note) }) : t("history.answeredUnnamed"));
+  // Opened from a doorbell's ring screen or banner (1.11.0, ADR-078).
+  else if (entry.kind === "door" && entry.ids?.doorbell_id && entry.note) parts.push(t("history.fromDoorbell", { name: isolate(entry.note) }));
   return parts.join(" · ");
 }
 

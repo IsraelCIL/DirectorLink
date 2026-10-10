@@ -379,7 +379,7 @@ had died without anyone noticing was lost. Since 1.10.1:
   that went while the relay had not said so yet, on a connection that then ended, is let go (that
   relay may have been one before 1.10.1, which pushed it and ignored its id).
 - **The hourly limits count what was sent.** An alert kept counts toward the controller's limits
-  (60 an hour, 30 of them a camera's) as one sent, and is given back if it is let go before it ever
+  (60 an hour, 30 of them a camera's, and since 1.11.0 10 a smoke or CO alarm's, ADR-080) as one sent, and is given back if it is let go before it ever
   went: an outage uses up no limit.
 - **For a minute or two, twenty at most.** A doorbell's ring and a door's question are kept 60 s
   (they are brief: the push service keeps them only a minute, a visitor does not wait longer, and a

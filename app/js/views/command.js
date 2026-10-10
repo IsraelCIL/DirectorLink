@@ -396,7 +396,7 @@ function confirmControl(now, where, { confirm, cancel, suffix = "" }) {
   ];
 }
 
-// One of two or three things said: what it understood, then its result or its second tap.
+// One of two to five things said: what it understood, then its result or its second tap.
 function partBody(part, where, index) {
   const suffix = `:${index}`;
   const result = (stage, text) => h("p", { class: `command-result is-${stage}` }, icon(stage === "done" ? "check" : "info"), h("span", {}, text));
